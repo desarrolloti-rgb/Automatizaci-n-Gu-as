@@ -1,0 +1,13 @@
+package com.calimport.guias;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+
+@SpringBootApplication
+public class GuiasBackendApplication {
+
+	public static void main(String[] args) {
+		SpringApplication.run(GuiasBackendApplication.class, args);
+	}
+
+}
