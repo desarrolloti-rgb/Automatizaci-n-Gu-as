@@ -96,6 +96,80 @@ class GuiaServiceTest {
         verify(guiaRepository, never()).save(any());
     }
 
+    // --- sincronizarDesdeSap (upsert) ---
+
+    @Test
+    void sincronizarCreaLaGuiaCuandoEsLaPrimeraVezQueLlegaDeSap() {
+        when(guiaRepository.findByDocEntry(DOC_ENTRY)).thenReturn(Optional.empty());
+        devuelveLoQueGuarda();
+
+        Guia guia = service.sincronizarDesdeSap(DOC_ENTRY, FOLIO, "Cliente X", "Av. Siempre Viva 742");
+
+        assertEquals(DOC_ENTRY, guia.getDocEntry());
+        assertEquals("Cliente X", guia.getCliente());
+        assertEquals(EstadoGuia.PENDIENTE, guia.getEstado());
+    }
+
+    @Test
+    void sincronizarRefrescaLosDatosDeUnaGuiaPendienteEnLugarDeRebotar() {
+        // A diferencia de crear(), encontrarla no es un 409: es el caso normal a partir
+        // de la segunda sincronización.
+        Guia yaImportada = guiaPendiente();
+        when(guiaRepository.findByDocEntry(DOC_ENTRY)).thenReturn(Optional.of(yaImportada));
+        devuelveLoQueGuarda();
+
+        Guia guia = service.sincronizarDesdeSap(DOC_ENTRY, 9999L, "Cliente Corregido", "Nueva Direccion 123");
+
+        assertSame(yaImportada, guia);
+        assertEquals(9999L, guia.getFolio());
+        assertEquals("Cliente Corregido", guia.getCliente());
+        assertEquals("Nueva Direccion 123", guia.getDireccion());
+    }
+
+    @Test
+    void sincronizarNoPisaUnaGuiaYaEntregada() {
+        // Lo guardado documenta lo que se entregó: reescribirlo borraría la evidencia.
+        Guia entregada = guiaConRepartidor();
+        entregada.setEstado(EstadoGuia.ENTREGADA);
+        entregada.setUrlFoto("https://fotos/1.jpg");
+        when(guiaRepository.findByDocEntry(DOC_ENTRY)).thenReturn(Optional.of(entregada));
+
+        Guia guia = service.sincronizarDesdeSap(DOC_ENTRY, 9999L, "Cliente Corregido", "Otra Direccion");
+
+        assertEquals("Cliente X", guia.getCliente());
+        assertEquals(FOLIO, guia.getFolio());
+        assertEquals("https://fotos/1.jpg", guia.getUrlFoto());
+        verify(guiaRepository, never()).save(any());
+    }
+
+    @Test
+    void sincronizarNoPisaUnaGuiaYaRechazada() {
+        Guia rechazada = guiaConRepartidor();
+        rechazada.setEstado(EstadoGuia.RECHAZADA);
+        when(guiaRepository.findByDocEntry(DOC_ENTRY)).thenReturn(Optional.of(rechazada));
+
+        service.sincronizarDesdeSap(DOC_ENTRY, 9999L, "Cliente Corregido", "Otra Direccion");
+
+        verify(guiaRepository, never()).save(any());
+    }
+
+    @Test
+    void sincronizarNuncaTocaLosCamposQueGeneraLaApp() {
+        // Solo viajan los cuatro datos de SAP; el reparto es asunto de la app.
+        Guia enReparto = guiaConRepartidor();
+        enReparto.setRecibidaPorRepartidor(true);
+        enReparto.setFechaRecepcionRepartidor(Instant.now());
+        when(guiaRepository.findByDocEntry(DOC_ENTRY)).thenReturn(Optional.of(enReparto));
+        devuelveLoQueGuarda();
+
+        Guia guia = service.sincronizarDesdeSap(DOC_ENTRY, FOLIO, "Cliente X", "Direccion Corregida");
+
+        assertEquals(7, guia.getRepartidorId());
+        assertTrue(guia.isRecibidaPorRepartidor());
+        assertNotNull(guia.getFechaRecepcionRepartidor());
+        assertEquals("Direccion Corregida", guia.getDireccion());
+    }
+
     // --- lecturas ---
 
     @Test

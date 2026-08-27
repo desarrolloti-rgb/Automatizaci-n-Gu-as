@@ -30,6 +30,32 @@ public class GuiaService {
         return guiaRepository.save(new Guia(docEntry, folio, cliente, direccion));
     }
 
+    /**
+     * Da de alta la guía, o refresca sus datos de SAP si ya estaba importada. Es lo que
+     * llama la sincronización: a diferencia de {@link #crear}, encontrar la guía no es un
+     * error, es el caso normal en la segunda corrida en adelante. Así llegan también las
+     * correcciones hechas en SAP antes del despacho (una dirección mal escrita, por ejemplo).
+     *
+     * <p>Una guía ya resuelta no se toca: su contenido documenta lo que efectivamente se
+     * entregó o se rechazó, y reescribirlo después borraría esa evidencia. Los campos que
+     * genera la app (repartidor, estado, foto) nunca se tocan acá — solo viajan los cuatro
+     * datos que son de SAP.
+     */
+    @Transactional
+    public Guia sincronizarDesdeSap(int docEntry, Long folio, String cliente, String direccion) {
+        Guia guia = guiaRepository.findByDocEntry(docEntry)
+                .orElseGet(() -> new Guia(docEntry, folio, cliente, direccion));
+
+        if (guia.getEstado() != EstadoGuia.PENDIENTE) {
+            return guia;
+        }
+
+        guia.setFolio(folio);
+        guia.setCliente(cliente);
+        guia.setDireccion(direccion);
+        return guiaRepository.save(guia);
+    }
+
     //Permite leer las guías sin necesidad de transacción, ya que no se modifican los datos.
 
     @Transactional(readOnly = true)
