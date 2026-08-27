@@ -54,10 +54,6 @@
 			<groupId>org.apache.httpcomponents.client5</groupId>
 			<artifactId>httpclient5</artifactId>
 		</dependency>
-		<dependency>
-			<groupId>com.fasterxml.jackson.core</groupId>
-			<artifactId>jackson-databind</artifactId>
-		</dependency>
 		<!-- Spring Boot 4 reparte las autoconfiguraciones en modulos: flyway-core trae la
 		     libreria, spring-boot-flyway el arranque automatico al levantar la app. -->
 		<dependency>

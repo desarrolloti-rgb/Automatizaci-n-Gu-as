@@ -1,7 +1,8 @@
 package com.calimport.guias.sap;
 
-import com.fasterxml.jackson.databind.JsonNode;
 import org.springframework.stereotype.Component;
+
+import tools.jackson.databind.JsonNode;
 
 /** Solo lo que Guias necesita de SAP por ahora: resolver al repartidor que inicia sesión. */
 @Component
@@ -11,6 +12,26 @@ public class SapClient {
 
     public SapClient(SapSessionManager sessionManager) {
         this.sessionManager = sessionManager;
+    }
+
+    /**
+     * Guías de despacho tal como las devuelve SAP, sin filtrar ni recortar campos.
+     *
+     * <p>A propósito no lleva {@code $select}: la idea es ver el documento completo para
+     * confirmar cómo se llaman realmente los campos en esta instalación (de dónde sale el
+     * folio, con qué se filtran las guías por despachar) antes de fijar el mapeo. Cuando
+     * eso esté decidido, este método se reemplaza por uno que traiga solo lo necesario.
+     *
+     * <p>Se ordena por DocEntry descendente para que las primeras filas sean las guías
+     * más recientes, que son las útiles para revisar.
+     */
+    public JsonNode fetchDeliveryNotes(int top) {
+        return sessionManager.executeWithSession(cookie ->
+                sessionManager.getRestClient().get()
+                        .uri("/DeliveryNotes?$top={top}&$orderby=DocEntry desc", String.valueOf(top))
+                        .header("Cookie", cookie)
+                        .retrieve()
+                        .body(JsonNode.class));
     }
 
     /** Igual que en Dashboard: busca en EmployeesInfo por eMail, solo activos. */
