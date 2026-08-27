@@ -40,15 +40,11 @@ public class Guia {
 
     // --- Datos de la guía que se van generando en la app ---
 
-    @NotNull
-    @Column(nullable = false)
     private Integer repartidorId;
 
     @Column(nullable = false)
     private boolean recibidaPorRepartidor;
 
-    @NotNull
-    @Column(nullable = false)
     private Instant fechaRecepcionRepartidor;
 
     @NotNull
@@ -56,14 +52,10 @@ public class Guia {
     @Column(nullable = false)
     private EstadoGuia estado = EstadoGuia.PENDIENTE;
 
-    @NotNull
-    @Column(nullable = false)
     private Instant fechaEntrega;
 
    /// --- Evidencia fotográfica ---
 
-    @NotBlank
-    @Column(nullable = false)
     private String urlFoto;
 
     /**
@@ -71,8 +63,6 @@ public class Guia {
      * demostrar que la evidencia no se alteró después de capturada, y es imposible
      * de reconstruir si no se guarda en el momento.
      */
-    @NotBlank
-    @Column(nullable = false)
     private String hashFoto;
 
     // --- Sincronización con SAP ---
