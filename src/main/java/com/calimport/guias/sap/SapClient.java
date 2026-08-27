@@ -1,5 +1,7 @@
 package com.calimport.guias.sap;
 
+import java.time.LocalDate;
+
 import org.springframework.stereotype.Component;
 
 import tools.jackson.databind.JsonNode;
@@ -12,6 +14,25 @@ public class SapClient {
 
     public SapClient(SapSessionManager sessionManager) {
         this.sessionManager = sessionManager;
+    }
+
+    /**
+     * Guías de despacho emitidas desde una fecha, con solo los cuatro campos que la app
+     * necesita.
+     *
+     * <p>El {@code $select} importa: sin él, SAP devuelve el documento completo con todas
+     * sus líneas (cientos de campos por guía). Acotarlo baja la respuesta a una fracción.
+     */
+    public JsonNode fetchGuiasDeDespacho(LocalDate desde) {
+        String filter = "DocDate ge '" + desde + "'";
+        return sessionManager.executeWithSession(cookie ->
+                sessionManager.getRestClient().get()
+                        .uri("/DeliveryNotes?$filter={filter}"
+                           + "&$select=DocEntry,FolioNumber,CardName,Address"
+                           + "&$orderby=DocEntry", filter)
+                        .header("Cookie", cookie)
+                        .retrieve()
+                        .body(JsonNode.class));
     }
 
     /**
