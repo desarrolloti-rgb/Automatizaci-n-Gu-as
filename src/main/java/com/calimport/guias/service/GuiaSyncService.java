@@ -6,6 +6,7 @@ import java.util.List;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import com.calimport.guias.sap.GuiaSap;
@@ -27,10 +28,13 @@ public class GuiaSyncService {
 
     private final SapClient sapClient;
     private final GuiaService guiaService;
+    private final String filtroExtra;
 
-    public GuiaSyncService(SapClient sapClient, GuiaService guiaService) {
+    public GuiaSyncService(SapClient sapClient, GuiaService guiaService,
+                            @Value("${guias.sync.filtro-extra:}") String filtroExtra) {
         this.sapClient = sapClient;
         this.guiaService = guiaService;
+        this.filtroExtra = filtroExtra;
     }
 
     /** Cuántas guías se sincronizaron y cuántas filas de SAP se descartaron por venir incompletas. */
@@ -38,7 +42,7 @@ public class GuiaSyncService {
     }
 
     public Resultado sincronizarDesde(LocalDate desde) {
-        JsonNode respuesta = sapClient.fetchGuiasDeDespacho(desde);
+        JsonNode respuesta = sapClient.fetchGuiasDeDespacho(desde, filtroExtra);
 
         JsonNode value = respuesta == null ? null : respuesta.get("value");
         if (value == null || !value.isArray()) {

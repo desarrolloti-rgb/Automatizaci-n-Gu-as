@@ -1,7 +1,11 @@
 package com.calimport.guias.controller;
 
+import java.time.LocalDate;
 import java.util.List;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -19,7 +23,10 @@ import com.calimport.guias.controller.dto.CrearGuiaRequest;
 import com.calimport.guias.controller.dto.EntregaRequest;
 import com.calimport.guias.model.EstadoGuia;
 import com.calimport.guias.model.Guia;
+import com.calimport.guias.sap.SapSessionManager.SapUnauthorizedException;
 import com.calimport.guias.service.GuiaService;
+import com.calimport.guias.service.GuiaSyncService;
+import com.calimport.guias.utils.ApiException;
 
 import jakarta.validation.Valid;
 
@@ -28,10 +35,36 @@ import jakarta.validation.Valid;
 @PreAuthorize("isAuthenticated()")
 public class GuiaController {
 
-    private final GuiaService guiaService;
+    private static final Logger log = LoggerFactory.getLogger(GuiaController.class);
 
-    public GuiaController(GuiaService guiaService) {
+    private final GuiaService guiaService;
+    private final GuiaSyncService guiaSyncService;
+
+    public GuiaController(GuiaService guiaService, GuiaSyncService guiaSyncService) {
         this.guiaService = guiaService;
+        this.guiaSyncService = guiaSyncService;
+    }
+
+    /**
+     * Trae de SAP las guías emitidas desde una fecha y las vuelca a la copia local.
+     *
+     * <p>Es idempotente: repetirla no duplica nada y solo refresca las que sigan
+     * PENDIENTE. Por ahora se dispara a mano; cuando el criterio de filtrado esté
+     * confirmado, se le puede colgar un {@code @Scheduled}.
+     */
+    @PostMapping("/sincronizar")
+    public GuiaSyncService.Resultado sincronizar(
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate desde) {
+        LocalDate fecha = desde != null ? desde : LocalDate.now();
+        try {
+            return guiaSyncService.sincronizarDesde(fecha);
+        } catch (SapUnauthorizedException e) {
+            log.error("Sesion SAP invalida sincronizando guias: {}", e.getMessage());
+            throw new ApiException(HttpStatus.BAD_GATEWAY, "Error de sesión con SAP");
+        } catch (Exception e) {
+            log.error("Error sincronizando guias desde SAP: {}", e.getMessage(), e);
+            throw new ApiException(HttpStatus.BAD_GATEWAY, "Error de conexión con SAP");
+        }
     }
 
     /** Sin filtros trae todas las guías; con estado o repartidorId, las filtra. */

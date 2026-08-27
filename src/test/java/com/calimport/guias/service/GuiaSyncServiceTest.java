@@ -37,7 +37,7 @@ class GuiaSyncServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new GuiaSyncService(sapClient, guiaService);
+        service = new GuiaSyncService(sapClient, guiaService, "");
         mapper = new ObjectMapper();
     }
 
@@ -67,7 +67,7 @@ class GuiaSyncServiceTest {
         // guia que lleva el repartidor. Confundirlos le muestra un numero que no cuadra.
         ObjectNode fila = fila(1, 187350L, "CORESA S.A.", "SAN NICOLAS 630");
         fila.put("DocNum", 9900001);
-        when(sapClient.fetchGuiasDeDespacho(DESDE)).thenReturn(respuestaCon(fila));
+        when(sapClient.fetchGuiasDeDespacho(DESDE, "")).thenReturn(respuestaCon(fila));
 
         service.sincronizarDesde(DESDE);
 
@@ -77,7 +77,7 @@ class GuiaSyncServiceTest {
     @Test
     void laDireccionSeNormalizaParaQueSeLeaEnElCelular() {
         // SAP trae retornos de carro sueltos y lineas vacias.
-        when(sapClient.fetchGuiasDeDespacho(DESDE))
+        when(sapClient.fetchGuiasDeDespacho(DESDE, ""))
                 .thenReturn(respuestaCon(fila(1, 187350L, "CORESA S.A.",
                         "SAN NICOLAS #  630\r\r SANTIAGO\rCHILE")));
 
@@ -89,7 +89,7 @@ class GuiaSyncServiceTest {
 
     @Test
     void sincronizaTodasLasGuiasDeLaRespuesta() {
-        when(sapClient.fetchGuiasDeDespacho(DESDE)).thenReturn(respuestaCon(
+        when(sapClient.fetchGuiasDeDespacho(DESDE, "")).thenReturn(respuestaCon(
                 fila(1, 187350L, "Cliente A", "Direccion A"),
                 fila(2, 187351L, "Cliente B", "Direccion B"),
                 fila(3, 187352L, "Cliente C", "Direccion C")));
@@ -108,7 +108,7 @@ class GuiaSyncServiceTest {
         sinDocEntry.put("FolioNumber", 187350L);
         sinDocEntry.put("CardName", "Cliente sin id");
 
-        when(sapClient.fetchGuiasDeDespacho(DESDE)).thenReturn(respuestaCon(sinDocEntry));
+        when(sapClient.fetchGuiasDeDespacho(DESDE, "")).thenReturn(respuestaCon(sinDocEntry));
 
         GuiaSyncService.Resultado resultado = service.sincronizarDesde(DESDE);
 
@@ -123,7 +123,7 @@ class GuiaSyncServiceTest {
         sinFolio.put("DocEntry", 1);
         sinFolio.put("CardName", "Cliente sin folio");
 
-        when(sapClient.fetchGuiasDeDespacho(DESDE)).thenReturn(respuestaCon(sinFolio));
+        when(sapClient.fetchGuiasDeDespacho(DESDE, "")).thenReturn(respuestaCon(sinFolio));
 
         assertEquals(1, service.sincronizarDesde(DESDE).descartadas());
         verify(guiaService, never()).sincronizarDesdeSap(anyInt(), any(), any(), any());
@@ -134,7 +134,7 @@ class GuiaSyncServiceTest {
         ObjectNode mala = mapper.createObjectNode();
         mala.put("CardName", "Fila incompleta");
 
-        when(sapClient.fetchGuiasDeDespacho(DESDE)).thenReturn(respuestaCon(
+        when(sapClient.fetchGuiasDeDespacho(DESDE, "")).thenReturn(respuestaCon(
                 fila(1, 187350L, "Cliente A", "Direccion A"),
                 mala,
                 fila(3, 187352L, "Cliente C", "Direccion C")));
@@ -147,7 +147,7 @@ class GuiaSyncServiceTest {
 
     @Test
     void unaRespuestaVaciaDeSapNoRompeNada() {
-        when(sapClient.fetchGuiasDeDespacho(DESDE)).thenReturn(respuestaCon());
+        when(sapClient.fetchGuiasDeDespacho(DESDE, "")).thenReturn(respuestaCon());
 
         GuiaSyncService.Resultado resultado = service.sincronizarDesde(DESDE);
 
@@ -157,7 +157,7 @@ class GuiaSyncServiceTest {
 
     @Test
     void unaRespuestaSinArregloValueNoRompeNada() {
-        when(sapClient.fetchGuiasDeDespacho(DESDE)).thenReturn(mapper.createObjectNode());
+        when(sapClient.fetchGuiasDeDespacho(DESDE, "")).thenReturn(mapper.createObjectNode());
 
         GuiaSyncService.Resultado resultado = service.sincronizarDesde(DESDE);
 
@@ -166,12 +166,24 @@ class GuiaSyncServiceTest {
     }
 
     @Test
+    void elFiltroExtraDeConfiguracionLlegaASap() {
+        // Permite acotar a las guias que despacha Calimport sin recompilar, mientras se
+        // confirma cual es el criterio correcto en esta instalacion.
+        GuiaSyncService conFiltro = new GuiaSyncService(sapClient, guiaService, "U_TipoDesp eq '2'");
+        when(sapClient.fetchGuiasDeDespacho(DESDE, "U_TipoDesp eq '2'")).thenReturn(respuestaCon());
+
+        conFiltro.sincronizarDesde(DESDE);
+
+        verify(sapClient).fetchGuiasDeDespacho(DESDE, "U_TipoDesp eq '2'");
+    }
+
+    @Test
     void unCampoDeTextoAusenteQuedaVacioEnLugarDeNull() {
         ObjectNode sinCliente = mapper.createObjectNode();
         sinCliente.put("DocEntry", 1);
         sinCliente.put("FolioNumber", 187350L);
 
-        when(sapClient.fetchGuiasDeDespacho(DESDE)).thenReturn(respuestaCon(sinCliente));
+        when(sapClient.fetchGuiasDeDespacho(DESDE, "")).thenReturn(respuestaCon(sinCliente));
 
         service.sincronizarDesde(DESDE);
 

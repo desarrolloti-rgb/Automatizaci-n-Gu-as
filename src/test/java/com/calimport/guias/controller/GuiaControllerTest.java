@@ -1,5 +1,6 @@
 package com.calimport.guias.controller;
 
+import java.time.LocalDate;
 import java.util.List;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -16,6 +17,7 @@ import com.calimport.guias.model.EstadoGuia;
 import com.calimport.guias.model.Guia;
 import com.calimport.guias.security.JwtTokenProvider;
 import com.calimport.guias.service.GuiaService;
+import com.calimport.guias.service.GuiaSyncService;
 import com.calimport.guias.utils.ApiException;
 
 import static org.mockito.ArgumentMatchers.any;
@@ -46,6 +48,9 @@ class GuiaControllerTest {
 
     @MockitoBean
     private GuiaService guiaService;
+
+    @MockitoBean
+    private GuiaSyncService guiaSyncService;
 
     private String bearer;
 
@@ -233,6 +238,49 @@ class GuiaControllerTest {
                 .andExpect(status().isOk());
 
         verify(guiaService).marcarSincronizada(1L);
+    }
+
+    // --- sincronizacion desde SAP ---
+
+    @Test
+    void sincronizarSinTokenNoLlegaASap() throws Exception {
+        mockMvc.perform(post("/api/guias/sincronizar"))
+                .andExpect(status().isUnauthorized());
+
+        verify(guiaSyncService, never()).sincronizarDesde(any());
+    }
+
+    @Test
+    void sincronizarDevuelveElResumenDeLoImportado() throws Exception {
+        when(guiaSyncService.sincronizarDesde(LocalDate.of(2026, 8, 1)))
+                .thenReturn(new GuiaSyncService.Resultado(12, 1));
+
+        mockMvc.perform(post("/api/guias/sincronizar")
+                        .param("desde", "2026-08-01")
+                        .header("Authorization", bearer))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.sincronizadas").value(12))
+                .andExpect(jsonPath("$.descartadas").value(1));
+    }
+
+    @Test
+    void sincronizarSinFechaUsaHoy() throws Exception {
+        when(guiaSyncService.sincronizarDesde(LocalDate.now()))
+                .thenReturn(new GuiaSyncService.Resultado(0, 0));
+
+        mockMvc.perform(post("/api/guias/sincronizar").header("Authorization", bearer))
+                .andExpect(status().isOk());
+
+        verify(guiaSyncService).sincronizarDesde(LocalDate.now());
+    }
+
+    @Test
+    void sincronizarConSapCaidoDevuelveBadGateway() throws Exception {
+        when(guiaSyncService.sincronizarDesde(any()))
+                .thenThrow(new RuntimeException("connection timeout"));
+
+        mockMvc.perform(post("/api/guias/sincronizar").header("Authorization", bearer))
+                .andExpect(status().isBadGateway());
     }
 
     // --- errores inesperados ---
