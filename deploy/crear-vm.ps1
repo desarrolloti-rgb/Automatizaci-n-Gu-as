@@ -23,10 +23,12 @@
   y abrir http://localhost:8080 en el navegador del PC. El trafico va cifrado por SSH.
 
 .EXAMPLE
-  .\deploy\crear-vm.ps1 -Proyecto mi-proyecto-gcp
+  .\deploy\crear-vm.ps1
+  .\deploy\crear-vm.ps1 -Zona us-east1-d    # junto a la VM de Dashboard, mas barato
 #>
 param(
-  [Parameter(Mandatory = $true)][string]$Proyecto,
+  # El de Calimport. No es un secreto: un id de proyecto no da acceso a nada por si solo.
+  [string]$Proyecto = 'charming-hearth-503417-i0',
   [string]$Nombre = 'guias',
   # Santiago: es la region mas cercana, y la latencia la siente el repartidor en la calle.
   [string]$Zona = 'southamerica-west1-a',
