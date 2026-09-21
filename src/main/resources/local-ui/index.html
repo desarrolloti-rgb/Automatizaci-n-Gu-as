@@ -174,9 +174,13 @@ function tarjeta(g) {
     }
     acciones.append(
       el("button", { className: "ok", textContent: "Entregar", onclick: () => formularioEntrega(g, extra) }),
-      el("button", { className: "peligro", textContent: "Rechazar", onclick: () =>
-        confirm(`¿Rechazar la guía folio ${g.folio}?`) &&
-        accion(() => api(`/api/guias/${g.id}/rechazo`, { method: "POST" }), "Guía rechazada") }));
+      el("button", { className: "peligro", textContent: "Rechazar", onclick: () => {
+        // El motivo es obligatorio: sin el, el backend responde 400.
+        const motivo = prompt(`¿Por qué rechazó el cliente la guía folio ${g.folio}?`);
+        if (motivo && motivo.trim()) {
+          accion(() => api(`/api/guias/${g.id}/rechazo`, { method: "POST", json: { motivo } }), "Guía rechazada");
+        }
+      } }));
   }
 
   if (g.estado === "ENTREGADA" && g.urlFoto) {

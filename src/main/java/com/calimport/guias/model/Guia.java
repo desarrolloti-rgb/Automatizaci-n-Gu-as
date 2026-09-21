@@ -88,6 +88,13 @@ public class Guia {
      */
     private String hashFoto;
 
+    /**
+     * Por qué el cliente rechazó la guía, en palabras del repartidor. Solo lo tienen las
+     * RECHAZADA: es su evidencia, el equivalente a la foto de una entrega, y lo que le
+     * permite a bodega saber si hay que reprogramar, corregir el pedido o cobrar el flete.
+     */
+    private String motivoRechazo;
+
     // --- Sincronización con SAP ---
 
     @Column(nullable = false)
@@ -268,6 +275,14 @@ public class Guia {
 
     public void setHashFoto(String hashFoto) {
         this.hashFoto = hashFoto;
+    }
+
+    public String getMotivoRechazo() {
+        return motivoRechazo;
+    }
+
+    public void setMotivoRechazo(String motivoRechazo) {
+        this.motivoRechazo = motivoRechazo;
     }
 
     public boolean isSincronizada() {

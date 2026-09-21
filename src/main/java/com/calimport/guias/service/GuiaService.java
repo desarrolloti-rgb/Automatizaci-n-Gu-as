@@ -253,13 +253,21 @@ public class GuiaService {
         return guiaRepository.save(guia);
     }
 
-    // Cliente rechazó el despacho completo. 
+    /**
+     * Cliente rechazó el despacho completo. El motivo es obligatorio y queda guardado: es la
+     * evidencia del rechazo, lo que la foto es de la entrega.
+     */
     @Transactional
-    public Guia rechazar(Long id, int repartidorId) {
+    public Guia rechazar(Long id, int repartidorId, String motivo) {
+        String motivoLimpio = motivo == null ? "" : motivo.trim();
+        if (motivoLimpio.isEmpty()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Hay que indicar por qué el cliente rechazó la guía");
+        }
         Guia guia = obtenerPropia(id, repartidorId);
         validarQuePuedaResolverse(guia);
         guia.setEstado(EstadoGuia.RECHAZADA);
         guia.setFechaEntrega(Instant.now());
+        guia.setMotivoRechazo(motivoLimpio);
         return guiaRepository.save(guia);
     }
 

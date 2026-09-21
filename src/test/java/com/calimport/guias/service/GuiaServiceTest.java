@@ -8,6 +8,9 @@ import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.NullSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
@@ -596,13 +599,36 @@ class GuiaServiceTest {
         when(guiaRepository.findById(1L)).thenReturn(Optional.of(guiaConRepartidor()));
         devuelveLoQueGuarda();
 
-        Guia resultado = service.rechazar(1L, 7);
+        Guia resultado = service.rechazar(1L, 7, "El cliente no tenía espacio en bodega");
 
         assertEquals(EstadoGuia.RECHAZADA, resultado.getEstado());
         assertNotNull(resultado.getFechaEntrega());
+        assertEquals("El cliente no tenía espacio en bodega", resultado.getMotivoRechazo());
         // Un rechazo no tiene foto de recepción: los campos quedan vacíos a propósito.
         assertNull(resultado.getUrlFoto());
         assertNull(resultado.getHashFoto());
+    }
+
+    @Test
+    void rechazarGuardaElMotivoSinEspaciosSobrantes() {
+        when(guiaRepository.findById(1L)).thenReturn(Optional.of(guiaConRepartidor()));
+        devuelveLoQueGuarda();
+
+        Guia resultado = service.rechazar(1L, 7, "   Se equivocaron de producto  ");
+
+        assertEquals("Se equivocaron de producto", resultado.getMotivoRechazo());
+    }
+
+    @ParameterizedTest
+    @NullSource
+    @ValueSource(strings = {"", "   "})
+    void rechazarSinMotivoEsBadRequest(String motivo) {
+        ApiException e = assertThrows(ApiException.class, () -> service.rechazar(1L, 7, motivo));
+
+        assertEquals(HttpStatus.BAD_REQUEST, e.getStatus());
+        // Se valida antes de tocar la base: un rechazo sin motivo no llega ni a buscarse.
+        verify(guiaRepository, never()).findById(any());
+        verify(guiaRepository, never()).save(any());
     }
 
     @Test
@@ -611,7 +637,7 @@ class GuiaServiceTest {
         entregada.setEstado(EstadoGuia.ENTREGADA);
         when(guiaRepository.findById(1L)).thenReturn(Optional.of(entregada));
 
-        ApiException e = assertThrows(ApiException.class, () -> service.rechazar(1L, 7));
+        ApiException e = assertThrows(ApiException.class, () -> service.rechazar(1L, 7, "No estaba el encargado"));
 
         assertEquals(HttpStatus.CONFLICT, e.getStatus());
     }
@@ -620,7 +646,7 @@ class GuiaServiceTest {
     void rechazarUnaGuiaDeOtroRepartidorEsForbidden() {
         when(guiaRepository.findById(1L)).thenReturn(Optional.of(guiaConRepartidor()));
 
-        ApiException e = assertThrows(ApiException.class, () -> service.rechazar(1L, 8));
+        ApiException e = assertThrows(ApiException.class, () -> service.rechazar(1L, 8, "No estaba el encargado"));
 
         assertEquals(HttpStatus.FORBIDDEN, e.getStatus());
         verify(guiaRepository, never()).save(any());

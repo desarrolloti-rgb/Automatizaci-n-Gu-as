@@ -304,32 +304,58 @@ class GuiaControllerTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"urlFoto\":\"https://fotos/1.jpg\",\"hashFoto\":\"abc123\"}"))
                 .andExpect(status().isForbidden());
-        mockMvc.perform(post("/api/guias/1/rechazo").header("Authorization", jefe))
+        mockMvc.perform(post("/api/guias/1/rechazo")
+                        .header("Authorization", jefe)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"motivo\":\"No estaba el encargado\"}"))
                 .andExpect(status().isForbidden());
         mockMvc.perform(patch("/api/guias/1/recepcion").header("Authorization", jefe))
                 .andExpect(status().isForbidden());
 
         verify(guiaService, never()).entregar(anyLong(), anyInt(), any(), any());
-        verify(guiaService, never()).rechazar(anyLong(), anyInt());
+        verify(guiaService, never()).rechazar(anyLong(), anyInt(), any());
         verify(guiaService, never()).marcarRecibidaPorRepartidor(anyLong(), anyInt());
     }
 
     @Test
-    void rechazarDevuelve200() throws Exception {
-        when(guiaService.rechazar(1L, 7)).thenReturn(guia());
+    void rechazarPasaElMotivoAlService() throws Exception {
+        when(guiaService.rechazar(1L, 7, "El cliente no tenía espacio")).thenReturn(guia());
 
-        mockMvc.perform(post("/api/guias/1/rechazo").header("Authorization", repartidor))
+        mockMvc.perform(post("/api/guias/1/rechazo")
+                        .header("Authorization", repartidor)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"motivo\":\"El cliente no tenía espacio\"}"))
                 .andExpect(status().isOk());
 
-        verify(guiaService).rechazar(1L, 7);
+        verify(guiaService).rechazar(1L, 7, "El cliente no tenía espacio");
+    }
+
+    @Test
+    void rechazarSinMotivoEsBadRequestYNoLlegaAlService() throws Exception {
+        mockMvc.perform(post("/api/guias/1/rechazo")
+                        .header("Authorization", repartidor)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"motivo\":\"  \"}"))
+                .andExpect(status().isBadRequest());
+
+        mockMvc.perform(post("/api/guias/1/rechazo")
+                        .header("Authorization", repartidor)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isBadRequest());
+
+        verify(guiaService, never()).rechazar(anyLong(), anyInt(), any());
     }
 
     @Test
     void rechazarUnaGuiaAjenaDevuelve403() throws Exception {
-        when(guiaService.rechazar(1L, 7))
+        when(guiaService.rechazar(1L, 7, "No estaba el encargado"))
                 .thenThrow(new ApiException(HttpStatus.FORBIDDEN, "La guía no está asignada a este repartidor"));
 
-        mockMvc.perform(post("/api/guias/1/rechazo").header("Authorization", repartidor))
+        mockMvc.perform(post("/api/guias/1/rechazo")
+                        .header("Authorization", repartidor)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"motivo\":\"No estaba el encargado\"}"))
                 .andExpect(status().isForbidden());
     }
 

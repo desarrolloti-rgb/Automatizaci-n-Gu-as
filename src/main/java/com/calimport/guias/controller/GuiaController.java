@@ -23,6 +23,7 @@ import com.calimport.guias.controller.dto.AsignarRepartidorRequest;
 import com.calimport.guias.controller.dto.CrearGuiaRequest;
 import com.calimport.guias.controller.dto.DefinirHorarioRequest;
 import com.calimport.guias.controller.dto.EntregaRequest;
+import com.calimport.guias.controller.dto.RechazoRequest;
 import com.calimport.guias.model.EstadoGuia;
 import com.calimport.guias.model.Guia;
 import com.calimport.guias.sap.SapSessionManager.SapUnauthorizedException;
@@ -127,10 +128,12 @@ public class GuiaController {
                 request.urlFoto(), request.hashFoto());
     }
 
+    /** El motivo viaja en el cuerpo y es obligatorio: ver {@link RechazoRequest}. */
     @PostMapping("/{id}/rechazo")
     @PreAuthorize("hasRole('REPARTIDOR')")
-    public Guia rechazar(@PathVariable Long id, Authentication authentication) {
-        return guiaService.rechazar(id, UsuarioActual.de(authentication).employeeId());
+    public Guia rechazar(@PathVariable Long id, @RequestBody @Valid RechazoRequest request,
+                         Authentication authentication) {
+        return guiaService.rechazar(id, UsuarioActual.de(authentication).employeeId(), request.motivo());
     }
 
     @PatchMapping("/{id}/sincronizada")
