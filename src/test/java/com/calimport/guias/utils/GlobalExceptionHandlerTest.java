@@ -2,9 +2,11 @@ package com.calimport.guias.utils;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -32,6 +34,17 @@ class GlobalExceptionHandlerTest {
     private HttpStatus statusDe(HttpStatus status) {
         ResponseEntity<ProblemDetail> respuesta = handler.handleApiException(new ApiException(status, "mensaje"));
         return HttpStatus.valueOf(respuesta.getStatusCode().value());
+    }
+
+    @Test
+    void unaUrlInexistenteEs404YNoUn500() {
+        ResponseEntity<ProblemDetail> respuesta = handler.handleRecursoInexistente(
+                new NoResourceFoundException(HttpMethod.GET, "noexiste/profundo", "/noexiste/profundo"));
+
+        assertEquals(HttpStatus.NOT_FOUND, HttpStatus.valueOf(respuesta.getStatusCode().value()));
+        assertNotNull(respuesta.getBody());
+        // No se filtra la ruta pedida: a un robot que sondea no se le confirma nada.
+        assertEquals("No existe el recurso solicitado", respuesta.getBody().getDetail());
     }
 
     @Test

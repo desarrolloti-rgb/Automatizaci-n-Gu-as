@@ -39,6 +39,11 @@ public class SecurityConfig {
                 // abrir la pantalla. Los datos siguen exigiendo token, y el rol lo decide
                 // el @PreAuthorize de cada método.
                 .requestMatchers("/api/**").authenticated()
+                // Actuator no es parte de la app pero viaja en el jar, y "todo lo que no sea
+                // /api es publico" lo dejaba abierto: /actuator y /actuator/health respondian
+                // sin token. Spring solo expone esos dos por defecto, pero basta una linea de
+                // configuracion para que aparezcan env o heapdump, y ahi ya no es un detalle.
+                .requestMatchers("/actuator/**").authenticated()
                 .anyRequest().permitAll()
             )
             // Sin esto, Spring Security usa Http403ForbiddenEntryPoint y responde 403 a

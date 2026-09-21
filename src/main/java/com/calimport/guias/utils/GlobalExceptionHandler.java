@@ -13,6 +13,7 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.multipart.MultipartException;
 import org.springframework.web.multipart.support.MissingServletRequestPartException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 /**
  * Reemplaza los try/catch repetidos en cada controller: cualquier excepción termina
@@ -76,6 +77,17 @@ public class GlobalExceptionHandler {
         ProblemDetail pd = ProblemDetail.forStatusAndDetail(HttpStatus.FORBIDDEN,
                 "No tiene permisos para esta operación");
         return ResponseEntity.status(HttpStatus.FORBIDDEN).body(pd);
+    }
+
+    /**
+     * Una URL que no existe. Sin esto caía en el handler genérico: el cliente recibía un 500
+     * y cada sondeo de un robot escribía un ERROR con stacktrace en el log, ahogando los
+     * errores de verdad. Un recurso inexistente es 404 y no merece traza.
+     */
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ResponseEntity<ProblemDetail> handleRecursoInexistente(NoResourceFoundException e) {
+        ProblemDetail pd = ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, "No existe el recurso solicitado");
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(pd);
     }
 
     @ExceptionHandler(Exception.class)
