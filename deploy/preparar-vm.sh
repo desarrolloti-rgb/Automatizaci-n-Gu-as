@@ -18,6 +18,25 @@ echo ">>> Java 21 y Postgres"
 apt-get update -qq
 apt-get install -y openjdk-21-jre-headless postgresql postgresql-contrib
 
+echo ">>> Swap"
+# La VM es e2-small (2 GB) y ahi entran justos la JVM (~750 MB con -Xmx512m), Postgres y el
+# sistema. Sin swap, cualquier pico hace que el kernel mate el proceso mas grande, que es
+# la app: exactamente lo que paso en el PC de desarrollo. 2 GB de swap no la hacen rapida,
+# pero evitan que se caiga por un pico de un minuto.
+if ! swapon --show | grep -q '/swapfile'; then
+  fallocate -l 2G /swapfile
+  chmod 600 /swapfile
+  mkswap /swapfile
+  swapon /swapfile
+  grep -q '/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+  # Usar swap solo cuando de verdad falta memoria, no de forma preventiva.
+  sysctl -w vm.swappiness=10
+  grep -q 'vm.swappiness' /etc/sysctl.conf || echo 'vm.swappiness=10' >> /etc/sysctl.conf
+  echo "    2 GB de swap activos"
+else
+  echo "    ya habia swap"
+fi
+
 echo ">>> Base de datos"
 # La BASE se crea aca; las TABLAS las crea Flyway en cada arranque de la app.
 # Idempotente: correr el script dos veces no rompe nada.

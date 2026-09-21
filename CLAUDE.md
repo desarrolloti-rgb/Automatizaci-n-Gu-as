@@ -220,10 +220,27 @@ Todo lo necesario está en `deploy/`:
 
 | Archivo | Cuándo |
 |---|---|
-| `preparar-vm.sh` | Una vez, con sudo: Java 21, Postgres, base, carpetas y respaldo diario |
+| `crear-vm.ps1` | Una vez: la VM (`e2-small`, Santiago) y su IP estática, con `gcloud` |
+| `preparar-vm.sh` | Una vez, con sudo: Java 21, swap, Postgres, base, carpetas y respaldo |
 | `env.ejemplo` | Plantilla de `/home/usuario/app/.env` — completar y `chmod 600` |
 | `guias.service` | A `/etc/systemd/system/`, luego `systemctl enable --now guias` |
 | `desplegar.ps1` | Cada despliegue, desde el PC |
+
+**Por qué `gcloud` y no Terraform**: para un recurso creado una sola vez, Terraform agrega
+instalación, cuenta de servicio y un archivo de estado que hay que cuidar, a cambio de poco.
+Lo que de verdad no se reconstruye de memoria es la configuración *dentro* de la VM, y eso
+está en `preparar-vm.sh`. Vale la pena revisarlo cuando aparezcan el bucket de respaldos, el
+DNS y el certificado: ahí se pasa de un recurso a media docena.
+
+**El puerto 8080 no está abierto** por decisión: mientras el login viaje sin cifrar, no se
+expone a internet. Para probar la app desplegada, túnel SSH desde el PC:
+
+```powershell
+gcloud compute ssh guias --zone southamerica-west1-a -- -L 8080:localhost:8080
+```
+
+y abrir `http://localhost:8080`. El tráfico va cifrado dentro de SSH. Recién con
+`guias.calimport.cl` y certificado se abre el 443.
 
 ```powershell
 .\deploy\desplegar.ps1 -Servidor <ip> -Usuario usuario
