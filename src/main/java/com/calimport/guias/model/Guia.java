@@ -1,6 +1,7 @@
 package com.calimport.guias.model;
 
 import java.time.Instant;
+import java.time.LocalTime;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -37,6 +38,28 @@ public class Guia {
     @NotBlank
     @Column(nullable = false)
     private String direccion;
+
+    /** Comments de SAP. Suele traer el horario de recepción escrito a mano. */
+    private String comentario;
+
+    // --- Datos para armar la ruta ---
+
+    private Double latitud;
+
+    private Double longitud;
+
+    @Column(nullable = false)
+    private boolean ubicacionAproximada;
+
+    private LocalTime ventanaDesde;
+
+    private LocalTime ventanaHasta;
+
+    private String notaEntrega;
+
+    /** Null mientras el comentario no se haya interpretado y el bodeguero no haya definido nada. */
+    @Enumerated(EnumType.STRING)
+    private OrigenHorario origenHorario;
 
     // --- Datos de la guía que se van generando en la app ---
 
@@ -121,6 +144,74 @@ public class Guia {
 
     public void setDireccion(String direccion) {
         this.direccion = direccion;
+    }
+
+    public String getComentario() {
+        return comentario;
+    }
+
+    public void setComentario(String comentario) {
+        this.comentario = comentario;
+    }
+
+    public Double getLatitud() {
+        return latitud;
+    }
+
+    public void setLatitud(Double latitud) {
+        this.latitud = latitud;
+    }
+
+    public Double getLongitud() {
+        return longitud;
+    }
+
+    public void setLongitud(Double longitud) {
+        this.longitud = longitud;
+    }
+
+    public boolean isUbicacionAproximada() {
+        return ubicacionAproximada;
+    }
+
+    public void setUbicacionAproximada(boolean ubicacionAproximada) {
+        this.ubicacionAproximada = ubicacionAproximada;
+    }
+
+    public boolean tieneUbicacion() {
+        return latitud != null && longitud != null;
+    }
+
+    public LocalTime getVentanaDesde() {
+        return ventanaDesde;
+    }
+
+    public void setVentanaDesde(LocalTime ventanaDesde) {
+        this.ventanaDesde = ventanaDesde;
+    }
+
+    public LocalTime getVentanaHasta() {
+        return ventanaHasta;
+    }
+
+    public void setVentanaHasta(LocalTime ventanaHasta) {
+        this.ventanaHasta = ventanaHasta;
+    }
+
+    public String getNotaEntrega() {
+        return notaEntrega;
+    }
+
+    public void setNotaEntrega(String notaEntrega) {
+        this.notaEntrega = notaEntrega;
+    }
+
+    public OrigenHorario getOrigenHorario() {
+        return origenHorario;
+    }
+
+    public void setOrigenHorario(OrigenHorario origenHorario) {
+        this.origenHorario = origenHorario;
     }
 
     public Integer getRepartidorId() {

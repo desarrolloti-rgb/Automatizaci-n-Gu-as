@@ -7,6 +7,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
 import com.calimport.guias.model.Repartidor;
+import com.calimport.guias.model.Rol;
 
 @Repository
 public interface RepartidorRepository extends JpaRepository<Repartidor, Integer> {
@@ -14,5 +15,7 @@ public interface RepartidorRepository extends JpaRepository<Repartidor, Integer>
     Optional<Repartidor> findByEmail(String email);
 
     List<Repartidor> findByActivoTrue();
+
+    List<Repartidor> findByActivoTrueAndRol(Rol rol);
 
 }

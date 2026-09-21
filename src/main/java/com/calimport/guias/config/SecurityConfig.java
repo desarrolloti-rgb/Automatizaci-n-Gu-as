@@ -32,7 +32,14 @@ public class SecurityConfig {
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/api/auth/login").permitAll()
-                .anyRequest().authenticated()
+                // Lo único que se protege es la API. Todo lo demás es la app Angular que
+                // sirve este mismo jar: HTML, JS y CSS que cualquiera puede descargar de
+                // todas formas. Protegerlos obligaría a mandar el token en la navegación
+                // del navegador, que no lo hace: recargar en /bodega daría 401 en vez de
+                // abrir la pantalla. Los datos siguen exigiendo token, y el rol lo decide
+                // el @PreAuthorize de cada método.
+                .requestMatchers("/api/**").authenticated()
+                .anyRequest().permitAll()
             )
             // Sin esto, Spring Security usa Http403ForbiddenEntryPoint y responde 403 a
             // quien no mandó token. Para un cliente JWT es 401: le dice que vuelva a

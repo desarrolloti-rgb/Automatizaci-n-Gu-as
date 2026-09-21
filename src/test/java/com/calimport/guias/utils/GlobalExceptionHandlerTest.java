@@ -57,6 +57,14 @@ class GlobalExceptionHandlerTest {
     }
 
     @Test
+    void unaFotoDemasiadoGrandeEs413YNo500() {
+        ResponseEntity<ProblemDetail> respuesta = handler.handleArchivoGrande(
+                new org.springframework.web.multipart.MaxUploadSizeExceededException(10_485_760));
+
+        assertEquals(413, respuesta.getStatusCode().value());
+    }
+
+    @Test
     void unApiExceptionDe500TambienSeGeneralizaAlCliente() {
         // El status lo decide la excepción, pero el mensaje sigue siendo el que se le puso:
         // por eso los 500 internos deben lanzarse sin datos sensibles en el mensaje.

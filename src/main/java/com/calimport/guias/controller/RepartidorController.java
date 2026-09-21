@@ -12,9 +12,10 @@ import org.springframework.web.bind.annotation.RestController;
 import com.calimport.guias.model.Repartidor;
 import com.calimport.guias.service.RepartidorService;
 
+/** Para que bodega elija a quién asignar. El repartidor no necesita ver a los demás. */
 @RestController
 @RequestMapping("/api/repartidores")
-@PreAuthorize("isAuthenticated()")
+@PreAuthorize("hasRole('JEFE_BODEGA')")
 public class RepartidorController {
 
     private final RepartidorService repartidorService;

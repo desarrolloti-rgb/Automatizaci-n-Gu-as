@@ -39,7 +39,7 @@ public class SapClient {
         return sessionManager.executeWithSession(cookie ->
                 sessionManager.getRestClient().get()
                         .uri("/DeliveryNotes?$filter={filter}"
-                           + "&$select=DocEntry,FolioNumber,CardName,Address"
+                           + "&$select=DocEntry,FolioNumber,CardName,Address,Address2,Comments"
                            + "&$orderby=DocEntry", filter)
                         .header("Cookie", cookie)
                         .retrieve()

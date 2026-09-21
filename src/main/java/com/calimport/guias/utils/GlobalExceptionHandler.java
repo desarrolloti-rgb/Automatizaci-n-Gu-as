@@ -5,9 +5,14 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
+import org.springframework.web.multipart.MultipartException;
+import org.springframework.web.multipart.support.MissingServletRequestPartException;
 
 /**
  * Reemplaza los try/catch repetidos en cada controller: cualquier excepción termina
@@ -36,6 +41,41 @@ public class GlobalExceptionHandler {
                 .orElse("Datos inválidos");
         ProblemDetail pd = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, detalle);
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(pd);
+    }
+
+    /** JSON mal formado o con tipos que no calzan: es un error del cliente, no un 500. */
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<ProblemDetail> handleCuerpoIlegible(HttpMessageNotReadableException e) {
+        ProblemDetail pd = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST,
+                "El cuerpo de la request no es un JSON válido para esta operación");
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(pd);
+    }
+
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    public ResponseEntity<ProblemDetail> handleArchivoGrande(MaxUploadSizeExceededException e) {
+        ProblemDetail pd = ProblemDetail.forStatusAndDetail(HttpStatus.CONTENT_TOO_LARGE,
+                "La foto supera el tamaño máximo permitido (10 MB)");
+        return ResponseEntity.status(HttpStatus.CONTENT_TOO_LARGE).body(pd);
+    }
+
+    /** Sin esto, una subida sin el campo "archivo" terminaría como 500. */
+    @ExceptionHandler({MissingServletRequestPartException.class, MultipartException.class})
+    public ResponseEntity<ProblemDetail> handleMultipartInvalido(Exception e) {
+        ProblemDetail pd = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST,
+                "Se esperaba la foto en el campo 'archivo' (multipart/form-data)");
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(pd);
+    }
+
+    /**
+     * Un {@code @PreAuthorize} que no pasa. Sin esto caería en el handler genérico y el
+     * cliente vería un 500 donde corresponde "no tenés permiso". El 401 (sin token o token
+     * vencido) no pasa por acá: lo resuelve el entry point de SecurityConfig.
+     */
+    @ExceptionHandler(AccessDeniedException.class)
+    public ResponseEntity<ProblemDetail> handleSinPermiso(AccessDeniedException e) {
+        ProblemDetail pd = ProblemDetail.forStatusAndDetail(HttpStatus.FORBIDDEN,
+                "No tiene permisos para esta operación");
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(pd);
     }
 
     @ExceptionHandler(Exception.class)

@@ -2,6 +2,7 @@ package com.calimport.guias.controller;
 
 import com.calimport.guias.controller.dto.LoginRequest;
 import com.calimport.guias.controller.dto.LoginResponse;
+import com.calimport.guias.model.Rol;
 import com.calimport.guias.sap.SapClient;
 import com.calimport.guias.sap.SapSessionManager.SapUnauthorizedException;
 import com.calimport.guias.security.JwtTokenProvider;
@@ -9,8 +10,14 @@ import com.calimport.guias.service.RepartidorService;
 import com.calimport.guias.utils.ApiException;
 import jakarta.validation.Valid;
 import tools.jackson.databind.JsonNode;
+import java.util.Arrays;
+import java.util.Locale;
+import java.util.Set;
+import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -25,6 +32,7 @@ import org.springframework.web.bind.annotation.RestController;
  */
 @RestController
 @RequestMapping("/api/auth")
+@ConditionalOnProperty(name = "auth.modo", havingValue = "sap", matchIfMissing = true)
 public class AuthController {
 
     private static final Logger log = LoggerFactory.getLogger(AuthController.class);
@@ -33,13 +41,25 @@ public class AuthController {
     private final RepartidorService repartidorService;
     private final PasswordEncoder passwordEncoder;
     private final JwtTokenProvider jwtTokenProvider;
+    private final Set<String> emailsJefesBodega;
 
+    /**
+     * @param jefesBodega emails separados por coma que entran como JEFE_BODEGA. Es
+     *     <b>provisorio</b>: el rol debería salir de un campo de EmployeesInfo, pero todavía
+     *     no está confirmado cuál es en esta instalación y no se inventa. Mientras tanto,
+     *     sin esta lista nadie podría sincronizar ni asignar guías con login SAP.
+     */
     public AuthController(SapClient sapClient, RepartidorService repartidorService,
-                           PasswordEncoder passwordEncoder, JwtTokenProvider jwtTokenProvider) {
+                           PasswordEncoder passwordEncoder, JwtTokenProvider jwtTokenProvider,
+                           @Value("${auth.jefes-bodega:}") String jefesBodega) {
         this.sapClient = sapClient;
         this.repartidorService = repartidorService;
         this.passwordEncoder = passwordEncoder;
         this.jwtTokenProvider = jwtTokenProvider;
+        this.emailsJefesBodega = Arrays.stream(jefesBodega.split(","))
+                .map(email -> email.trim().toLowerCase(Locale.ROOT))
+                .filter(email -> !email.isEmpty())
+                .collect(Collectors.toUnmodifiableSet());
     }
 
     @PostMapping("/login")
@@ -74,9 +94,11 @@ public class AuthController {
         String email = employee.get("eMail").asText();
         String nombre = nombreCompleto(employee);
 
-        repartidorService.upsertDesdeSap(employeeId, nombre, email, true);
+        Rol rol = emailsJefesBodega.contains(email.trim().toLowerCase(Locale.ROOT)) ? Rol.JEFE_BODEGA : Rol.REPARTIDOR;
 
-        String token = jwtTokenProvider.generateToken(email, employeeId, nombre);
+        repartidorService.upsertDesdeSap(employeeId, nombre, email, true, rol);
+
+        String token = jwtTokenProvider.generateToken(email, employeeId, nombre, rol);
         return new LoginResponse(token);
     }
 

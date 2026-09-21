@@ -12,6 +12,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
 
 import com.calimport.guias.model.Repartidor;
+import com.calimport.guias.model.Rol;
 import com.calimport.guias.repository.RepartidorRepository;
 import com.calimport.guias.utils.ApiException;
 
@@ -68,9 +69,10 @@ class RepartidorServiceTest {
     }
 
     @Test
-    void listarActivosExcluyeALosInactivos() {
+    void listarActivosTraeSoloRepartidoresActivosYNoAlJefeDeBodega() {
+        // El jefe de bodega también está en la tabla, pero no recibe guías.
         List<Repartidor> activos = List.of(repartidor(7, "Juan Perez", "juan@calimport.cl", true));
-        when(repartidorRepository.findByActivoTrue()).thenReturn(activos);
+        when(repartidorRepository.findByActivoTrueAndRol(Rol.REPARTIDOR)).thenReturn(activos);
 
         assertEquals(activos, service.listarActivos());
     }
@@ -80,12 +82,24 @@ class RepartidorServiceTest {
         when(repartidorRepository.findById(7)).thenReturn(Optional.empty());
         devuelveLoQueGuarda();
 
-        Repartidor resultado = service.upsertDesdeSap(7, "Juan Perez", "juan@calimport.cl", true);
+        Repartidor resultado = service.upsertDesdeSap(7, "Juan Perez", "juan@calimport.cl", true, Rol.REPARTIDOR);
 
         assertEquals(7, resultado.getEmployeeId());
         assertEquals("Juan Perez", resultado.getNombre());
         assertEquals("juan@calimport.cl", resultado.getEmail());
         assertTrue(resultado.isActivo());
+        assertEquals(Rol.REPARTIDOR, resultado.getRol());
+    }
+
+    @Test
+    void upsertRefrescaElRolEnCadaLogin() {
+        Repartidor existente = repartidor(9, "Pedro", "pedro@calimport.cl", true);
+        when(repartidorRepository.findById(9)).thenReturn(Optional.of(existente));
+        devuelveLoQueGuarda();
+
+        Repartidor resultado = service.upsertDesdeSap(9, "Pedro", "pedro@calimport.cl", true, Rol.JEFE_BODEGA);
+
+        assertEquals(Rol.JEFE_BODEGA, resultado.getRol());
     }
 
     @Test
@@ -94,7 +108,7 @@ class RepartidorServiceTest {
         when(repartidorRepository.findById(7)).thenReturn(Optional.of(existente));
         devuelveLoQueGuarda();
 
-        Repartidor resultado = service.upsertDesdeSap(7, "Nombre Nuevo", "nuevo@calimport.cl", true);
+        Repartidor resultado = service.upsertDesdeSap(7, "Nombre Nuevo", "nuevo@calimport.cl", true, Rol.REPARTIDOR);
 
         // Reusar la instancia encontrada es lo que hace que JPA emita UPDATE y no INSERT.
         ArgumentCaptor<Repartidor> guardado = ArgumentCaptor.forClass(Repartidor.class);
@@ -112,7 +126,7 @@ class RepartidorServiceTest {
         when(repartidorRepository.findById(7)).thenReturn(Optional.of(existente));
         devuelveLoQueGuarda();
 
-        Repartidor resultado = service.upsertDesdeSap(7, "Juan Perez", "juan@calimport.cl", false);
+        Repartidor resultado = service.upsertDesdeSap(7, "Juan Perez", "juan@calimport.cl", false, Rol.REPARTIDOR);
 
         assertFalse(resultado.isActivo());
     }

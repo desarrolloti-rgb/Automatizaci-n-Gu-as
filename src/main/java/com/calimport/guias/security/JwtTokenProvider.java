@@ -6,6 +6,8 @@ import io.jsonwebtoken.security.Keys;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
+import com.calimport.guias.model.Rol;
+
 import javax.crypto.SecretKey;
 import java.nio.charset.StandardCharsets;
 import java.util.Date;
@@ -27,13 +29,13 @@ public class JwtTokenProvider {
         this.ttlMinutes = ttlMinutes;
     }
 
-    public String generateToken(String email, int employeeId, String nombre) {
+    public String generateToken(String email, int employeeId, String nombre, Rol rol) {
         Date now = new Date();
         Date expiry = new Date(now.getTime() + ttlMinutes * 60_000);
 
         return Jwts.builder()
                 .subject(email)
-                .claim("role", "REPARTIDOR")
+                .claim("role", rol.name())
                 .claim("employeeId", employeeId)
                 .claim("nombre", nombre)
                 .issuedAt(now)

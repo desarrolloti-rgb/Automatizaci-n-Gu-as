@@ -1,5 +1,7 @@
 package com.calimport.guias.security;
 
+import com.calimport.guias.model.Rol;
+
 import io.jsonwebtoken.Claims;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -33,8 +35,10 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             if (jwtTokenProvider.validateToken(token)) {
                 Claims claims = jwtTokenProvider.parseToken(token);
                 String email = claims.getSubject();
-                String role = claims.get("role", String.class);
-                List<SimpleGrantedAuthority> authorities = List.of(new SimpleGrantedAuthority("ROLE_" + role));
+                // hasRole('JEFE_BODEGA') busca la authority ROLE_JEFE_BODEGA. Un claim ausente
+                // o desconocido queda como REPARTIDOR, nunca como "ROLE_null".
+                Rol rol = Rol.desdeClaim(claims.get("role"));
+                List<SimpleGrantedAuthority> authorities = List.of(new SimpleGrantedAuthority("ROLE_" + rol.name()));
 
                 UsernamePasswordAuthenticationToken auth =
                         new UsernamePasswordAuthenticationToken(email, null, authorities);

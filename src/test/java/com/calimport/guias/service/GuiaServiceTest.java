@@ -1,6 +1,7 @@
 package com.calimport.guias.service;
 
 import java.time.Instant;
+import java.time.LocalTime;
 import java.util.List;
 import java.util.Optional;
 
@@ -13,7 +14,10 @@ import org.springframework.http.HttpStatus;
 
 import com.calimport.guias.model.EstadoGuia;
 import com.calimport.guias.model.Guia;
+import com.calimport.guias.model.OrigenHorario;
+import com.calimport.guias.model.Rol;
 import com.calimport.guias.repository.GuiaRepository;
+import com.calimport.guias.security.UsuarioActual;
 import com.calimport.guias.utils.ApiException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -103,7 +107,7 @@ class GuiaServiceTest {
         when(guiaRepository.findByDocEntry(DOC_ENTRY)).thenReturn(Optional.empty());
         devuelveLoQueGuarda();
 
-        Guia guia = service.sincronizarDesdeSap(DOC_ENTRY, FOLIO, "Cliente X", "Av. Siempre Viva 742");
+        Guia guia = service.sincronizarDesdeSap(DOC_ENTRY, FOLIO, "Cliente X", "Av. Siempre Viva 742", null);
 
         assertEquals(DOC_ENTRY, guia.getDocEntry());
         assertEquals("Cliente X", guia.getCliente());
@@ -118,7 +122,7 @@ class GuiaServiceTest {
         when(guiaRepository.findByDocEntry(DOC_ENTRY)).thenReturn(Optional.of(yaImportada));
         devuelveLoQueGuarda();
 
-        Guia guia = service.sincronizarDesdeSap(DOC_ENTRY, 9999L, "Cliente Corregido", "Nueva Direccion 123");
+        Guia guia = service.sincronizarDesdeSap(DOC_ENTRY, 9999L, "Cliente Corregido", "Nueva Direccion 123", null);
 
         assertSame(yaImportada, guia);
         assertEquals(9999L, guia.getFolio());
@@ -134,7 +138,7 @@ class GuiaServiceTest {
         entregada.setUrlFoto("https://fotos/1.jpg");
         when(guiaRepository.findByDocEntry(DOC_ENTRY)).thenReturn(Optional.of(entregada));
 
-        Guia guia = service.sincronizarDesdeSap(DOC_ENTRY, 9999L, "Cliente Corregido", "Otra Direccion");
+        Guia guia = service.sincronizarDesdeSap(DOC_ENTRY, 9999L, "Cliente Corregido", "Otra Direccion", null);
 
         assertEquals("Cliente X", guia.getCliente());
         assertEquals(FOLIO, guia.getFolio());
@@ -148,7 +152,7 @@ class GuiaServiceTest {
         rechazada.setEstado(EstadoGuia.RECHAZADA);
         when(guiaRepository.findByDocEntry(DOC_ENTRY)).thenReturn(Optional.of(rechazada));
 
-        service.sincronizarDesdeSap(DOC_ENTRY, 9999L, "Cliente Corregido", "Otra Direccion");
+        service.sincronizarDesdeSap(DOC_ENTRY, 9999L, "Cliente Corregido", "Otra Direccion", null);
 
         verify(guiaRepository, never()).save(any());
     }
@@ -162,12 +166,157 @@ class GuiaServiceTest {
         when(guiaRepository.findByDocEntry(DOC_ENTRY)).thenReturn(Optional.of(enReparto));
         devuelveLoQueGuarda();
 
-        Guia guia = service.sincronizarDesdeSap(DOC_ENTRY, FOLIO, "Cliente X", "Direccion Corregida");
+        Guia guia = service.sincronizarDesdeSap(DOC_ENTRY, FOLIO, "Cliente X", "Direccion Corregida", null);
 
         assertEquals(7, guia.getRepartidorId());
         assertTrue(guia.isRecibidaPorRepartidor());
         assertNotNull(guia.getFechaRecepcionRepartidor());
         assertEquals("Direccion Corregida", guia.getDireccion());
+    }
+
+    @Test
+    void sincronizarBorraLasCoordenadasSiSapCorrigeLaDireccion() {
+        // Las coordenadas viejas mandarian al repartidor a la direccion equivocada.
+        Guia ubicada = guiaPendiente();
+        ubicada.setLatitud(-33.45);
+        ubicada.setLongitud(-70.66);
+        ubicada.setUbicacionAproximada(true);
+        when(guiaRepository.findByDocEntry(DOC_ENTRY)).thenReturn(Optional.of(ubicada));
+        devuelveLoQueGuarda();
+
+        Guia guia = service.sincronizarDesdeSap(DOC_ENTRY, FOLIO, "Cliente X", "Direccion Corregida", null);
+
+        assertFalse(guia.tieneUbicacion());
+        assertFalse(guia.isUbicacionAproximada());
+    }
+
+    @Test
+    void sincronizarConservaLasCoordenadasSiLaDireccionNoCambio() {
+        Guia ubicada = guiaPendiente();
+        ubicada.setLatitud(-33.45);
+        ubicada.setLongitud(-70.66);
+        when(guiaRepository.findByDocEntry(DOC_ENTRY)).thenReturn(Optional.of(ubicada));
+        devuelveLoQueGuarda();
+
+        Guia guia = service.sincronizarDesdeSap(DOC_ENTRY, FOLIO, "Cliente X", "Av. Siempre Viva 742", null);
+
+        assertTrue(guia.tieneUbicacion());
+    }
+
+    @Test
+    void sincronizarDescartaElHorarioInterpretadoSiCambiaElComentario() {
+        Guia interpretada = guiaPendiente();
+        interpretada.setComentario("recibe en la mañana");
+        interpretada.setVentanaDesde(LocalTime.of(9, 0));
+        interpretada.setVentanaHasta(LocalTime.of(13, 0));
+        interpretada.setOrigenHorario(OrigenHorario.COMENTARIO);
+        when(guiaRepository.findByDocEntry(DOC_ENTRY)).thenReturn(Optional.of(interpretada));
+        devuelveLoQueGuarda();
+
+        Guia guia = service.sincronizarDesdeSap(DOC_ENTRY, FOLIO, "Cliente X", "Av. Siempre Viva 742",
+                "recibe en la tarde");
+
+        assertEquals("recibe en la tarde", guia.getComentario());
+        assertNull(guia.getVentanaDesde());
+        assertNull(guia.getOrigenHorario());
+    }
+
+    @Test
+    void sincronizarRespetaElHorarioQueDefinioElBodeguero() {
+        Guia definida = guiaPendiente();
+        definida.setComentario("recibe en la mañana");
+        definida.setVentanaDesde(LocalTime.of(15, 0));
+        definida.setOrigenHorario(OrigenHorario.BODEGA);
+        when(guiaRepository.findByDocEntry(DOC_ENTRY)).thenReturn(Optional.of(definida));
+        devuelveLoQueGuarda();
+
+        Guia guia = service.sincronizarDesdeSap(DOC_ENTRY, FOLIO, "Cliente X", "Av. Siempre Viva 742", "otra cosa");
+
+        assertEquals(LocalTime.of(15, 0), guia.getVentanaDesde());
+        assertEquals(OrigenHorario.BODEGA, guia.getOrigenHorario());
+    }
+
+    @Test
+    void sincronizarGuardaUnComentarioEnBlancoComoNull() {
+        when(guiaRepository.findByDocEntry(DOC_ENTRY)).thenReturn(Optional.empty());
+        devuelveLoQueGuarda();
+
+        assertNull(service.sincronizarDesdeSap(DOC_ENTRY, FOLIO, "Cliente X", "Direccion", "  ").getComentario());
+    }
+
+    // --- horario ---
+
+    @Test
+    void definirHorarioLoMarcaComoDelBodeguero() {
+        when(guiaRepository.findById(1L)).thenReturn(Optional.of(guiaPendiente()));
+        devuelveLoQueGuarda();
+
+        Guia guia = service.definirHorario(1L, LocalTime.of(9, 0), LocalTime.of(13, 0), " Llamar antes ");
+
+        assertEquals(LocalTime.of(9, 0), guia.getVentanaDesde());
+        assertEquals(LocalTime.of(13, 0), guia.getVentanaHasta());
+        assertEquals("Llamar antes", guia.getNotaEntrega());
+        assertEquals(OrigenHorario.BODEGA, guia.getOrigenHorario());
+    }
+
+    @Test
+    void definirHorarioVacioDevuelveElControlAlComentario() {
+        Guia definida = guiaPendiente();
+        definida.setVentanaDesde(LocalTime.of(9, 0));
+        definida.setOrigenHorario(OrigenHorario.BODEGA);
+        when(guiaRepository.findById(1L)).thenReturn(Optional.of(definida));
+        devuelveLoQueGuarda();
+
+        Guia guia = service.definirHorario(1L, null, null, " ");
+
+        assertNull(guia.getVentanaDesde());
+        assertNull(guia.getOrigenHorario());
+    }
+
+    @Test
+    void definirHorarioRechazaUnRangoAlReves() {
+        ApiException e = assertThrows(ApiException.class,
+                () -> service.definirHorario(1L, LocalTime.of(13, 0), LocalTime.of(9, 0), null));
+
+        assertEquals(HttpStatus.BAD_REQUEST, e.getStatus());
+        verify(guiaRepository, never()).findById(any());
+    }
+
+    @Test
+    void definirHorarioRechazaUnaGuiaYaResuelta() {
+        Guia entregada = guiaConRepartidor();
+        entregada.setEstado(EstadoGuia.ENTREGADA);
+        when(guiaRepository.findById(1L)).thenReturn(Optional.of(entregada));
+
+        ApiException e = assertThrows(ApiException.class,
+                () -> service.definirHorario(1L, LocalTime.of(9, 0), null, null));
+
+        assertEquals(HttpStatus.CONFLICT, e.getStatus());
+    }
+
+    @Test
+    void guardarHorarioInterpretadoNoPisaLoQueDefinioElBodeguero() {
+        // El bodeguero pudo corregirlo mientras Gemini respondia.
+        Guia definida = guiaPendiente();
+        definida.setVentanaDesde(LocalTime.of(15, 0));
+        definida.setOrigenHorario(OrigenHorario.BODEGA);
+        when(guiaRepository.findById(1L)).thenReturn(Optional.of(definida));
+
+        Guia guia = service.guardarHorarioInterpretado(1L, LocalTime.of(9, 0), LocalTime.of(13, 0), null);
+
+        assertEquals(LocalTime.of(15, 0), guia.getVentanaDesde());
+        verify(guiaRepository, never()).save(any());
+    }
+
+    @Test
+    void guardarHorarioInterpretadoMarcaElOrigenAunqueNoHayaHorario() {
+        // Asi no se vuelve a pagar la interpretacion de un comentario que no dice nada del horario.
+        when(guiaRepository.findById(1L)).thenReturn(Optional.of(guiaPendiente()));
+        devuelveLoQueGuarda();
+
+        Guia guia = service.guardarHorarioInterpretado(1L, null, null, null);
+
+        assertEquals(OrigenHorario.COMENTARIO, guia.getOrigenHorario());
     }
 
     // --- lecturas ---
@@ -203,6 +352,87 @@ class GuiaServiceTest {
         when(guiaRepository.findByRepartidorId(7)).thenReturn(esperadas);
 
         assertEquals(esperadas, service.listarPorRepartidor(7));
+    }
+
+    // --- lecturas según el rol ---
+
+    private static final UsuarioActual JEFE = new UsuarioActual(9, Rol.JEFE_BODEGA);
+    private static final UsuarioActual REPARTIDOR_7 = new UsuarioActual(7, Rol.REPARTIDOR);
+
+    @Test
+    void elJefeDeBodegaListaTodasLasGuias() {
+        List<Guia> todas = List.of(guiaPendiente(), guiaConRepartidor());
+        when(guiaRepository.findAll()).thenReturn(todas);
+
+        assertEquals(todas, service.listarPara(JEFE, null, null));
+    }
+
+    @Test
+    void elJefeDeBodegaPuedeFiltrarPorCualquierRepartidor() {
+        List<Guia> esperadas = List.of(guiaConRepartidor());
+        when(guiaRepository.findByRepartidorId(7)).thenReturn(esperadas);
+
+        assertEquals(esperadas, service.listarPara(JEFE, null, 7));
+    }
+
+    @Test
+    void unRepartidorSinFiltrosVeSoloLasSuyas() {
+        List<Guia> suyas = List.of(guiaConRepartidor());
+        when(guiaRepository.findByRepartidorId(7)).thenReturn(suyas);
+
+        assertEquals(suyas, service.listarPara(REPARTIDOR_7, null, null));
+        verify(guiaRepository, never()).findAll();
+    }
+
+    @Test
+    void elEstadoDeUnRepartidorFiltraDentroDeLasSuyasYNoSobreTodas() {
+        List<Guia> suyas = List.of(guiaConRepartidor());
+        when(guiaRepository.findByRepartidorIdAndEstado(7, EstadoGuia.PENDIENTE)).thenReturn(suyas);
+
+        assertEquals(suyas, service.listarPara(REPARTIDOR_7, EstadoGuia.PENDIENTE, null));
+        verify(guiaRepository, never()).findByEstado(any());
+    }
+
+    @Test
+    void unRepartidorQuePideLasGuiasDeOtroRecibeForbidden() {
+        ApiException e = assertThrows(ApiException.class, () -> service.listarPara(REPARTIDOR_7, null, 8));
+
+        assertEquals(HttpStatus.FORBIDDEN, e.getStatus());
+        verify(guiaRepository, never()).findByRepartidorId(any());
+    }
+
+    @Test
+    void unRepartidorQuePasaSuPropioIdVeLasSuyas() {
+        List<Guia> suyas = List.of(guiaConRepartidor());
+        when(guiaRepository.findByRepartidorId(7)).thenReturn(suyas);
+
+        assertEquals(suyas, service.listarPara(REPARTIDOR_7, null, 7));
+    }
+
+    @Test
+    void elJefeDeBodegaObtieneCualquierGuia() {
+        Guia sinAsignar = guiaPendiente();
+        when(guiaRepository.findById(1L)).thenReturn(Optional.of(sinAsignar));
+
+        assertSame(sinAsignar, service.obtenerPara(1L, JEFE));
+    }
+
+    @Test
+    void unRepartidorObtieneUnaGuiaSuya() {
+        Guia suya = guiaConRepartidor();
+        when(guiaRepository.findById(1L)).thenReturn(Optional.of(suya));
+
+        assertSame(suya, service.obtenerPara(1L, REPARTIDOR_7));
+    }
+
+    @Test
+    void unRepartidorQuePideUnaGuiaAjenaRecibeForbiddenYNoNotFound() {
+        when(guiaRepository.findById(1L)).thenReturn(Optional.of(guiaConRepartidor()));
+
+        ApiException e = assertThrows(ApiException.class,
+                () -> service.obtenerPara(1L, new UsuarioActual(8, Rol.REPARTIDOR)));
+
+        assertEquals(HttpStatus.FORBIDDEN, e.getStatus());
     }
 
     // --- asignarRepartidor ---
@@ -247,7 +477,7 @@ class GuiaServiceTest {
         devuelveLoQueGuarda();
 
         Instant antes = Instant.now();
-        Guia resultado = service.marcarRecibidaPorRepartidor(1L);
+        Guia resultado = service.marcarRecibidaPorRepartidor(1L, 7);
         Instant despues = Instant.now();
 
         assertTrue(resultado.isRecibidaPorRepartidor());
@@ -259,12 +489,23 @@ class GuiaServiceTest {
     }
 
     @Test
-    void marcarRecibidaRechazaConConflictSiNoHayRepartidorAsignado() {
+    void marcarRecibidaRechazaConForbiddenSiLaGuiaNoTieneRepartidor() {
+        // Sin asignar no es de nadie: tampoco de quien la pide.
         when(guiaRepository.findById(1L)).thenReturn(Optional.of(guiaPendiente()));
 
-        ApiException e = assertThrows(ApiException.class, () -> service.marcarRecibidaPorRepartidor(1L));
+        ApiException e = assertThrows(ApiException.class, () -> service.marcarRecibidaPorRepartidor(1L, 7));
 
-        assertEquals(HttpStatus.CONFLICT, e.getStatus());
+        assertEquals(HttpStatus.FORBIDDEN, e.getStatus());
+        verify(guiaRepository, never()).save(any());
+    }
+
+    @Test
+    void marcarRecibidaRechazaConForbiddenSiLaGuiaEsDeOtroRepartidor() {
+        when(guiaRepository.findById(1L)).thenReturn(Optional.of(guiaConRepartidor()));
+
+        ApiException e = assertThrows(ApiException.class, () -> service.marcarRecibidaPorRepartidor(1L, 8));
+
+        assertEquals(HttpStatus.FORBIDDEN, e.getStatus());
         verify(guiaRepository, never()).save(any());
     }
 
@@ -274,7 +515,7 @@ class GuiaServiceTest {
         rechazada.setEstado(EstadoGuia.RECHAZADA);
         when(guiaRepository.findById(1L)).thenReturn(Optional.of(rechazada));
 
-        ApiException e = assertThrows(ApiException.class, () -> service.marcarRecibidaPorRepartidor(1L));
+        ApiException e = assertThrows(ApiException.class, () -> service.marcarRecibidaPorRepartidor(1L, 7));
 
         assertEquals(HttpStatus.CONFLICT, e.getStatus());
     }
@@ -287,7 +528,7 @@ class GuiaServiceTest {
         devuelveLoQueGuarda();
 
         Instant antes = Instant.now();
-        Guia resultado = service.entregar(1L, "https://fotos/guia-1.jpg", "abc123hash");
+        Guia resultado = service.entregar(1L, 7,"https://fotos/guia-1.jpg", "abc123hash");
         Instant despues = Instant.now();
 
         assertEquals(EstadoGuia.ENTREGADA, resultado.getEstado());
@@ -302,8 +543,8 @@ class GuiaServiceTest {
 
     @Test
     void entregarExigeUrlDeFoto() {
-        ApiException sinUrl = assertThrows(ApiException.class, () -> service.entregar(1L, null, "hash"));
-        ApiException urlEnBlanco = assertThrows(ApiException.class, () -> service.entregar(1L, "   ", "hash"));
+        ApiException sinUrl = assertThrows(ApiException.class, () -> service.entregar(1L, 7,null, "hash"));
+        ApiException urlEnBlanco = assertThrows(ApiException.class, () -> service.entregar(1L, 7,"   ", "hash"));
 
         assertEquals(HttpStatus.BAD_REQUEST, sinUrl.getStatus());
         assertEquals(HttpStatus.BAD_REQUEST, urlEnBlanco.getStatus());
@@ -312,8 +553,8 @@ class GuiaServiceTest {
 
     @Test
     void entregarExigeHashDeFoto() {
-        ApiException sinHash = assertThrows(ApiException.class, () -> service.entregar(1L, "https://f/1.jpg", null));
-        ApiException hashEnBlanco = assertThrows(ApiException.class, () -> service.entregar(1L, "https://f/1.jpg", "  "));
+        ApiException sinHash = assertThrows(ApiException.class, () -> service.entregar(1L, 7,"https://f/1.jpg", null));
+        ApiException hashEnBlanco = assertThrows(ApiException.class, () -> service.entregar(1L, 7,"https://f/1.jpg", "  "));
 
         assertEquals(HttpStatus.BAD_REQUEST, sinHash.getStatus());
         assertEquals(HttpStatus.BAD_REQUEST, hashEnBlanco.getStatus());
@@ -327,9 +568,24 @@ class GuiaServiceTest {
         when(guiaRepository.findById(1L)).thenReturn(Optional.of(entregada));
 
         ApiException e = assertThrows(ApiException.class,
-                () -> service.entregar(1L, "https://fotos/otra.jpg", "otrohash"));
+                () -> service.entregar(1L, 7,"https://fotos/otra.jpg", "otrohash"));
 
         assertEquals(HttpStatus.CONFLICT, e.getStatus());
+        verify(guiaRepository, never()).save(any());
+    }
+
+    @Test
+    void entregarUnaGuiaDeOtroRepartidorEsForbiddenAunqueEsteResuelta() {
+        // La pertenencia se revisa antes que el estado: a un tercero no se le cuenta
+        // en qué quedó una guía que no es suya.
+        Guia entregada = guiaConRepartidor();
+        entregada.setEstado(EstadoGuia.ENTREGADA);
+        when(guiaRepository.findById(1L)).thenReturn(Optional.of(entregada));
+
+        ApiException e = assertThrows(ApiException.class,
+                () -> service.entregar(1L, 8, "https://fotos/otra.jpg", "otrohash"));
+
+        assertEquals(HttpStatus.FORBIDDEN, e.getStatus());
         verify(guiaRepository, never()).save(any());
     }
 
@@ -340,7 +596,7 @@ class GuiaServiceTest {
         when(guiaRepository.findById(1L)).thenReturn(Optional.of(guiaConRepartidor()));
         devuelveLoQueGuarda();
 
-        Guia resultado = service.rechazar(1L);
+        Guia resultado = service.rechazar(1L, 7);
 
         assertEquals(EstadoGuia.RECHAZADA, resultado.getEstado());
         assertNotNull(resultado.getFechaEntrega());
@@ -355,9 +611,19 @@ class GuiaServiceTest {
         entregada.setEstado(EstadoGuia.ENTREGADA);
         when(guiaRepository.findById(1L)).thenReturn(Optional.of(entregada));
 
-        ApiException e = assertThrows(ApiException.class, () -> service.rechazar(1L));
+        ApiException e = assertThrows(ApiException.class, () -> service.rechazar(1L, 7));
 
         assertEquals(HttpStatus.CONFLICT, e.getStatus());
+    }
+
+    @Test
+    void rechazarUnaGuiaDeOtroRepartidorEsForbidden() {
+        when(guiaRepository.findById(1L)).thenReturn(Optional.of(guiaConRepartidor()));
+
+        ApiException e = assertThrows(ApiException.class, () -> service.rechazar(1L, 8));
+
+        assertEquals(HttpStatus.FORBIDDEN, e.getStatus());
+        verify(guiaRepository, never()).save(any());
     }
 
     // --- marcarSincronizada ---
@@ -369,7 +635,7 @@ class GuiaServiceTest {
         when(guiaRepository.findById(1L)).thenReturn(Optional.of(entregada));
         devuelveLoQueGuarda();
 
-        Guia resultado = service.marcarSincronizada(1L);
+        Guia resultado = service.marcarSincronizada(1L, 7);
 
         assertTrue(resultado.isSincronizada());
         assertEquals(EstadoGuia.ENTREGADA, resultado.getEstado());

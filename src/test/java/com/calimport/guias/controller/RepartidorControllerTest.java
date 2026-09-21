@@ -12,6 +12,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 import com.calimport.guias.model.Repartidor;
+import com.calimport.guias.model.Rol;
 import com.calimport.guias.security.JwtTokenProvider;
 import com.calimport.guias.service.RepartidorService;
 import com.calimport.guias.utils.ApiException;
@@ -40,7 +41,18 @@ class RepartidorControllerTest {
 
     @BeforeEach
     void setUp() {
-        bearer = "Bearer " + jwtTokenProvider.generateToken("juan@calimport.cl", 7, "Juan Perez");
+        bearer = "Bearer " + jwtTokenProvider.generateToken("jefe@calimport.cl", 9, "Jefe Bodega", Rol.JEFE_BODEGA);
+    }
+
+    @Test
+    void unRepartidorNoListaALosDemasRepartidores() throws Exception {
+        String repartidor = "Bearer " + jwtTokenProvider.generateToken("juan@calimport.cl", 7, "Juan Perez",
+                Rol.REPARTIDOR);
+
+        mockMvc.perform(get("/api/repartidores").header("Authorization", repartidor))
+                .andExpect(status().isForbidden());
+
+        verify(repartidorService, never()).listar();
     }
 
     private Repartidor repartidor() {

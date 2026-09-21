@@ -25,7 +25,7 @@ import tools.jackson.databind.JsonNode;
  */
 @RestController
 @RequestMapping("/api/sap")
-@PreAuthorize("isAuthenticated()")
+@PreAuthorize("hasRole('JEFE_BODEGA')")
 public class DeliveryNoteController {
 
     private static final Logger log = LoggerFactory.getLogger(DeliveryNoteController.class);

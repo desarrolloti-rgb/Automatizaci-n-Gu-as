@@ -90,6 +90,14 @@
 			<version>0.12.5</version>
 			<scope>runtime</scope>
 		</dependency>
+		<!-- Credenciales de GCP (Application Default Credentials) para Gemini y Route
+		     Optimization. Solo se usa para obtener el token OAuth: las llamadas van por
+		     RestClient, igual que las de SAP, sin los SDK completos de cada servicio. -->
+		<dependency>
+			<groupId>com.google.auth</groupId>
+			<artifactId>google-auth-library-oauth2-http</artifactId>
+			<version>1.52.0</version>
+		</dependency>
 
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
@@ -106,6 +114,8 @@
 			<artifactId>spring-boot-starter-webmvc-test</artifactId>
 			<scope>test</scope>
 		</dependency>
+		<!-- Solo para los tests: corren sobre H2 en modo PostgreSQL con las migraciones
+		     reales. El perfil "local" pasó a usar Postgres, así que ya no hace falta en runtime. -->
 		<dependency>
 			<groupId>com.h2database</groupId>
 			<artifactId>h2</artifactId>

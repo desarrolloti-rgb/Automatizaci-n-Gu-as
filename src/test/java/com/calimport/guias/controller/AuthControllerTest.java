@@ -11,6 +11,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 
 import com.calimport.guias.controller.dto.LoginRequest;
 import com.calimport.guias.controller.dto.LoginResponse;
+import com.calimport.guias.model.Rol;
 import com.calimport.guias.sap.SapClient;
 import com.calimport.guias.sap.SapSessionManager.SapUnauthorizedException;
 import com.calimport.guias.security.JwtTokenProvider;
@@ -52,7 +53,8 @@ class AuthControllerTest {
     @BeforeEach
     void setUp() {
         passwordEncoder = new BCryptPasswordEncoder();
-        controller = new AuthController(sapClient, repartidorService, passwordEncoder, jwtTokenProvider);
+        controller = new AuthController(sapClient, repartidorService, passwordEncoder, jwtTokenProvider,
+                " Jefe@Calimport.cl , otro.jefe@calimport.cl ");
         mapper = new ObjectMapper();
     }
 
@@ -83,20 +85,33 @@ class AuthControllerTest {
     void loginConPasswordBcryptDevuelveElTokenYSincronizaAlRepartidor() {
         when(sapClient.queryEmployeeByEmail(EMAIL))
                 .thenReturn(respuestaCon(empleado(passwordEncoder.encode("secreta123"))));
-        when(jwtTokenProvider.generateToken(EMAIL, EMPLOYEE_ID, "Juan Perez")).thenReturn("jwt-ok");
+        when(jwtTokenProvider.generateToken(EMAIL, EMPLOYEE_ID, "Juan Perez", Rol.REPARTIDOR)).thenReturn("jwt-ok");
 
         LoginResponse respuesta = controller.login(new LoginRequest(EMAIL, "secreta123"));
 
         assertEquals("jwt-ok", respuesta.token());
         // El login es el único momento en que se refresca la copia local desde SAP.
-        verify(repartidorService).upsertDesdeSap(EMPLOYEE_ID, "Juan Perez", EMAIL, true);
+        verify(repartidorService).upsertDesdeSap(EMPLOYEE_ID, "Juan Perez", EMAIL, true, Rol.REPARTIDOR);
+    }
+
+    @Test
+    void unEmailDeLaListaDeJefesEntraComoJefeDeBodega() {
+        // La comparación ignora mayúsculas y espacios de la configuración.
+        ObjectNode jefe = empleado("pass");
+        jefe.put("eMail", "jefe@calimport.cl");
+        when(sapClient.queryEmployeeByEmail("jefe@calimport.cl")).thenReturn(respuestaCon(jefe));
+        when(jwtTokenProvider.generateToken("jefe@calimport.cl", EMPLOYEE_ID, "Juan Perez", Rol.JEFE_BODEGA))
+                .thenReturn("jwt-jefe");
+
+        assertEquals("jwt-jefe", controller.login(new LoginRequest("jefe@calimport.cl", "pass")).token());
+        verify(repartidorService).upsertDesdeSap(EMPLOYEE_ID, "Juan Perez", "jefe@calimport.cl", true, Rol.JEFE_BODEGA);
     }
 
     @Test
     void loginConPasswordEnTextoPlanoTambienFunciona() {
         // Los usuarios aún no migrados a BCrypt tienen U_Password en texto plano.
         when(sapClient.queryEmployeeByEmail(EMAIL)).thenReturn(respuestaCon(empleado("miPassword123")));
-        when(jwtTokenProvider.generateToken(EMAIL, EMPLOYEE_ID, "Juan Perez")).thenReturn("jwt-plano");
+        when(jwtTokenProvider.generateToken(EMAIL, EMPLOYEE_ID, "Juan Perez", Rol.REPARTIDOR)).thenReturn("jwt-plano");
 
         LoginResponse respuesta = controller.login(new LoginRequest(EMAIL, "miPassword123"));
 
@@ -106,11 +121,11 @@ class AuthControllerTest {
     @Test
     void elNombreSeArmaConFirstNameYLastName() {
         when(sapClient.queryEmployeeByEmail(EMAIL)).thenReturn(respuestaCon(empleado("pass")));
-        when(jwtTokenProvider.generateToken(EMAIL, EMPLOYEE_ID, "Juan Perez")).thenReturn("jwt");
+        when(jwtTokenProvider.generateToken(EMAIL, EMPLOYEE_ID, "Juan Perez", Rol.REPARTIDOR)).thenReturn("jwt");
 
         controller.login(new LoginRequest(EMAIL, "pass"));
 
-        verify(jwtTokenProvider).generateToken(EMAIL, EMPLOYEE_ID, "Juan Perez");
+        verify(jwtTokenProvider).generateToken(EMAIL, EMPLOYEE_ID, "Juan Perez", Rol.REPARTIDOR);
     }
 
     @Test
@@ -121,7 +136,7 @@ class AuthControllerTest {
         sinNombre.put("U_Password", "pass");
 
         when(sapClient.queryEmployeeByEmail(EMAIL)).thenReturn(respuestaCon(sinNombre));
-        when(jwtTokenProvider.generateToken(EMAIL, EMPLOYEE_ID, "")).thenReturn("jwt-sin-nombre");
+        when(jwtTokenProvider.generateToken(EMAIL, EMPLOYEE_ID, "", Rol.REPARTIDOR)).thenReturn("jwt-sin-nombre");
 
         assertEquals("jwt-sin-nombre", controller.login(new LoginRequest(EMAIL, "pass")).token());
     }
@@ -139,7 +154,7 @@ class AuthControllerTest {
         assertEquals(HttpStatus.UNAUTHORIZED, e.getStatus());
         // Un login fallido no debe tocar la copia local ni emitir token.
         verifyNoInteractions(repartidorService);
-        verify(jwtTokenProvider, never()).generateToken(anyString(), anyInt(), anyString());
+        verify(jwtTokenProvider, never()).generateToken(anyString(), anyInt(), anyString(), any());
     }
 
     @Test
@@ -233,6 +248,6 @@ class AuthControllerTest {
         ApiException e = assertThrows(ApiException.class, () -> controller.login(new LoginRequest(EMAIL, "pass")));
 
         assertEquals(HttpStatus.BAD_GATEWAY, e.getStatus());
-        verify(repartidorService, never()).upsertDesdeSap(anyInt(), any(), any(), eq(true));
+        verify(repartidorService, never()).upsertDesdeSap(anyInt(), any(), any(), eq(true), any());
     }
 }

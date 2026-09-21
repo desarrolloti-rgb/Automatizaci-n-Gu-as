@@ -3,6 +3,8 @@ package com.calimport.guias.model;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
 import jakarta.validation.constraints.NotBlank;
 
@@ -25,6 +27,11 @@ public class Repartidor {
     /** Refleja el Active de SAP. Un repartidor inactivo no recibe asignaciones. */
     @Column(nullable = false)
     private boolean activo;
+
+    /** Se refresca en cada login. Solo los REPARTIDOR reciben guías. */
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false)
+    private Rol rol = Rol.REPARTIDOR;
 
     // --- getters y setters ---
 
@@ -58,5 +65,13 @@ public class Repartidor {
 
     public void setActivo(boolean activo) {
         this.activo = activo;
+    }
+
+    public Rol getRol() {
+        return rol;
+    }
+
+    public void setRol(Rol rol) {
+        this.rol = rol;
     }
 }

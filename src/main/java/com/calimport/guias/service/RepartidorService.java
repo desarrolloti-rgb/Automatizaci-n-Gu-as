@@ -7,6 +7,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.calimport.guias.model.Repartidor;
+import com.calimport.guias.model.Rol;
 import com.calimport.guias.repository.RepartidorRepository;
 import com.calimport.guias.utils.ApiException;
 
@@ -24,9 +25,10 @@ public class RepartidorService {
         return repartidorRepository.findAll();
     }
 
+    /** Los que pueden recibir guías: activos y con rol REPARTIDOR (el jefe de bodega no reparte). */
     @Transactional(readOnly = true)
     public List<Repartidor> listarActivos() {
-        return repartidorRepository.findByActivoTrue();
+        return repartidorRepository.findByActivoTrueAndRol(Rol.REPARTIDOR);
     }
 
     @Transactional(readOnly = true)
@@ -40,12 +42,13 @@ public class RepartidorService {
      * login exitoso: es la forma en que la copia local se mantiene al día, sin un job aparte.
      */
     @Transactional
-    public Repartidor upsertDesdeSap(int employeeId, String nombre, String email, boolean activo) {
+    public Repartidor upsertDesdeSap(int employeeId, String nombre, String email, boolean activo, Rol rol) {
         Repartidor repartidor = repartidorRepository.findById(employeeId).orElseGet(Repartidor::new);
         repartidor.setEmployeeId(employeeId);
         repartidor.setNombre(nombre);
         repartidor.setEmail(email);
         repartidor.setActivo(activo);
+        repartidor.setRol(rol);
         return repartidorRepository.save(repartidor);
     }
 }

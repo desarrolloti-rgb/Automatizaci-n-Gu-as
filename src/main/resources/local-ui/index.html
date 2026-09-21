@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Guías · MVP local</title>
+<style>
+  :root { --azul:#1f4d7a; --verde:#2f7d4a; --rojo:#b03a3a; --gris:#6a7584; --borde:#dbe2ea; --fondo:#f3f6f9; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; background:var(--fondo); color:#1d2430; }
+  header { background:var(--azul); color:#fff; padding:12px 16px; display:flex; justify-content:space-between; align-items:center; gap:8px; }
+  header h1 { font-size:17px; margin:0; }
+  header button { background:transparent; color:#fff; border:1px solid #ffffff80; }
+  main { max-width:720px; margin:0 auto; padding:16px; }
+  button { font:inherit; padding:9px 14px; border-radius:8px; border:1px solid var(--borde); background:#fff; cursor:pointer; }
+  button.primario { background:var(--azul); color:#fff; border-color:var(--azul); }
+  button.ok { background:var(--verde); color:#fff; border-color:var(--verde); }
+  button.peligro { color:var(--rojo); border-color:var(--rojo); }
+  button:disabled { opacity:.5; cursor:default; }
+  input, select { font:inherit; padding:9px 10px; border:1px solid var(--borde); border-radius:8px; width:100%; background:#fff; }
+  label { display:block; font-size:13px; color:var(--gris); margin:10px 0 4px; }
+  .tarjeta { background:#fff; border:1px solid var(--borde); border-radius:12px; padding:14px; margin-bottom:12px; }
+  .fila { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  .filtros { margin-bottom:14px; }
+  .filtros button.activo { background:var(--azul); color:#fff; border-color:var(--azul); }
+  .estado { font-size:12px; font-weight:600; padding:3px 8px; border-radius:99px; }
+  .PENDIENTE { background:#fff3dd; color:#8a5a00; }
+  .ENTREGADA { background:#e3f3e8; color:var(--verde); }
+  .RECHAZADA { background:#f8e3e3; color:var(--rojo); }
+  .titulo { font-weight:600; font-size:16px; }
+  .detalle { color:var(--gris); font-size:14px; margin:4px 0; }
+  .comentario { background:var(--fondo); border-radius:8px; padding:6px 10px; font-size:14px; margin:8px 0; }
+  .acciones { margin-top:10px; }
+  img.foto { max-width:100%; border-radius:8px; margin-top:8px; display:block; }
+  .hash { font-family:ui-monospace,Consolas,monospace; font-size:11px; color:var(--gris); word-break:break-all; }
+  #mensaje { position:fixed; left:16px; right:16px; bottom:16px; max-width:688px; margin:0 auto; padding:12px 14px; border-radius:10px; color:#fff; background:#1d2430; }
+  #mensaje.error { background:var(--rojo); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Guías de despacho · MVP local</h1>
+  <button id="salir" hidden>Salir</button>
+</header>
+
+<main>
+  <section id="login" class="tarjeta" hidden>
+    <div class="titulo">Iniciar sesión</div>
+    <form id="form-login">
+      <label for="email">Email</label>
+      <input id="email" type="email" value="uno@calimport.local" autocomplete="username" required>
+      <label for="password">Contraseña</label>
+      <input id="password" type="password" value="1234" autocomplete="current-password" required>
+      <div class="acciones"><button class="primario" type="submit">Entrar</button></div>
+    </form>
+    <p class="detalle">Usuarios de prueba: uno@calimport.local y dos@calimport.local, contraseña 1234.</p>
+  </section>
+
+  <section id="app" hidden>
+    <p class="detalle" id="saludo"></p>
+    <div class="fila filtros">
+      <button data-filtro="todas" class="activo">Todas</button>
+      <button data-filtro="mias">Mis guías</button>
+      <button data-filtro="PENDIENTE">Pendientes</button>
+      <button id="recargar">Recargar</button>
+    </div>
+    <div id="lista"></div>
+  </section>
+</main>
+
+<div id="mensaje" hidden></div>
+
+<script>
+const $ = (sel) => document.querySelector(sel);
+let token = sessionStorage.getItem("token");
+let yo = null;
+let repartidores = [];
+let filtro = "todas";
+
+function el(tag, props = {}, ...hijos) {
+  const nodo = document.createElement(tag);
+  Object.assign(nodo, props);
+  hijos.flat().forEach(h => h != null && nodo.append(h));
+  return nodo;
+}
+
+function avisar(texto, error = false) {
+  const m = $("#mensaje");
+  m.textContent = texto;
+  m.className = error ? "error" : "";
+  m.hidden = false;
+  clearTimeout(avisar.t);
+  avisar.t = setTimeout(() => (m.hidden = true), 4000);
+}
+
+async function api(ruta, opciones = {}) {
+  const headers = { ...(opciones.headers || {}) };
+  if (token) headers.Authorization = "Bearer " + token;
+  if (opciones.json !== undefined) {
+    headers["Content-Type"] = "application/json";
+    opciones.body = JSON.stringify(opciones.json);
+  }
+  const r = await fetch(ruta, { ...opciones, headers });
+  if (r.status === 401 && ruta !== "/api/auth/login") { cerrarSesion(); throw new Error("La sesión expiró"); }
+  if (!r.ok) {
+    let detalle = r.statusText;
+    try { detalle = (await r.json()).detail || detalle; } catch (_) {}
+    throw new Error(detalle);
+  }
+  const tipo = r.headers.get("Content-Type") || "";
+  return tipo.includes("json") ? r.json() : r;
+}
+
+function datosDelToken(t) {
+  const base64 = t.split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
+  return JSON.parse(decodeURIComponent(escape(atob(base64))));
+}
+
+function cerrarSesion() {
+  token = null;
+  sessionStorage.removeItem("token");
+  mostrar();
+}
+
+async function mostrar() {
+  $("#login").hidden = !!token;
+  $("#app").hidden = !token;
+  $("#salir").hidden = !token;
+  if (!token) return;
+  yo = datosDelToken(token);
+  $("#saludo").textContent = "Sesión de " + yo.nombre + " (id " + yo.employeeId + ", " + (yo.role || "REPARTIDOR") + ")";
+  // Solo bodega asigna: al repartidor el backend le niega la lista (403).
+  repartidores = esJefe() ? await api("/api/repartidores?activos=true") : [];
+  await cargar();
+}
+
+async function cargar() {
+  let ruta = "/api/guias";
+  if (filtro === "mias") ruta += "?repartidorId=" + yo.employeeId;
+  else if (filtro === "PENDIENTE") ruta += "?estado=PENDIENTE";
+  try {
+    const guias = await api(ruta);
+    guias.sort((a, b) => a.folio - b.folio);
+    const lista = $("#lista");
+    lista.replaceChildren(...(guias.length ? guias.map(tarjeta) : [el("p", { className: "detalle", textContent: "No hay guías." })]));
+  } catch (e) { avisar(e.message, true); }
+}
+
+function esJefe() {
+  return yo && yo.role === "JEFE_BODEGA";
+}
+
+function nombreRepartidor(id) {
+  const r = repartidores.find(x => x.employeeId === id);
+  return r ? r.nombre : "id " + id;
+}
+
+function tarjeta(g) {
+  const acciones = el("div", { className: "fila acciones" });
+  const extra = el("div");
+
+  if (g.estado === "PENDIENTE" && esJefe()) {
+    const selector = el("select", {},
+      el("option", { value: "", textContent: "Asignar a…" }),
+      repartidores.map(r => el("option", { value: r.employeeId, textContent: r.nombre, selected: r.employeeId === g.repartidorId })));
+    selector.style.width = "auto";
+    selector.onchange = () => selector.value && accion(() =>
+      api(`/api/guias/${g.id}/repartidor`, { method: "PATCH", json: { repartidorId: Number(selector.value) } }), "Repartidor asignado");
+    acciones.append(selector);
+  } else if (g.estado === "PENDIENTE") {
+    if (!g.recibidaPorRepartidor) {
+      acciones.append(el("button", { textContent: "Confirmar retiro",
+        onclick: () => accion(() => api(`/api/guias/${g.id}/recepcion`, { method: "PATCH" }), "Retiro confirmado") }));
+    }
+    acciones.append(
+      el("button", { className: "ok", textContent: "Entregar", onclick: () => formularioEntrega(g, extra) }),
+      el("button", { className: "peligro", textContent: "Rechazar", onclick: () =>
+        confirm(`¿Rechazar la guía folio ${g.folio}?`) &&
+        accion(() => api(`/api/guias/${g.id}/rechazo`, { method: "POST" }), "Guía rechazada") }));
+  }
+
+  if (g.estado === "ENTREGADA" && g.urlFoto) {
+    const img = el("img", { className: "foto", alt: "Foto de la entrega" });
+    api(g.urlFoto).then(r => r.blob()).then(b => (img.src = URL.createObjectURL(b))).catch(e => avisar(e.message, true));
+    extra.append(img, el("div", { className: "hash", textContent: "SHA-256: " + g.hashFoto }));
+  }
+
+  return el("div", { className: "tarjeta" },
+    el("div", { className: "fila" },
+      el("span", { className: "titulo", textContent: "Folio " + g.folio }),
+      el("span", { className: "estado " + g.estado, textContent: g.estado })),
+    el("div", { className: "detalle", textContent: g.cliente }),
+    el("div", { className: "detalle", textContent: g.direccion }),
+    g.comentario ? el("div", { className: "comentario", textContent: "💬 " + g.comentario }) : null,
+    el("div", { className: "detalle", textContent:
+      (g.repartidorId ? "Repartidor: " + nombreRepartidor(g.repartidorId) : "Sin repartidor") +
+      (g.recibidaPorRepartidor ? " · retirada" : "") +
+      (g.fechaEntrega ? " · " + new Date(g.fechaEntrega).toLocaleString("es-CL") : "") }),
+    acciones, extra);
+}
+
+function formularioEntrega(g, contenedor) {
+  const archivo = el("input", { type: "file", accept: "image/*" });
+  archivo.setAttribute("capture", "environment");
+  const vista = el("img", { className: "foto", hidden: true });
+  const confirmar = el("button", { className: "ok", textContent: "Subir foto y confirmar entrega", disabled: true });
+
+  archivo.onchange = () => {
+    const f = archivo.files[0];
+    confirmar.disabled = !f;
+    if (f) { vista.src = URL.createObjectURL(f); vista.hidden = false; }
+  };
+
+  confirmar.onclick = async () => {
+    confirmar.disabled = true;
+    confirmar.textContent = "Subiendo…";
+    try {
+      // Paso 1: la foto. Devuelve la URL y el hash calculado por el servidor.
+      const datos = new FormData();
+      datos.append("archivo", archivo.files[0]);
+      const foto = await api(`/api/guias/${g.id}/foto`, { method: "POST", body: datos });
+      // Paso 2: la entrega, con lo que devolvió el paso 1.
+      await api(`/api/guias/${g.id}/entrega`, { method: "POST", json: foto });
+      avisar("Entrega registrada");
+      await cargar();
+    } catch (e) {
+      avisar(e.message, true);
+      confirmar.disabled = false;
+      confirmar.textContent = "Subir foto y confirmar entrega";
+    }
+  };
+
+  contenedor.replaceChildren(
+    el("label", { textContent: "Foto de la guía firmada" }), archivo, vista,
+    el("div", { className: "fila acciones" }, confirmar));
+}
+
+async function accion(fn, textoOk) {
+  try { await fn(); avisar(textoOk); await cargar(); }
+  catch (e) { avisar(e.message, true); }
+}
+
+$("#form-login").onsubmit = async (ev) => {
+  ev.preventDefault();
+  try {
+    const r = await api("/api/auth/login", { method: "POST", json: { email: $("#email").value, password: $("#password").value } });
+    token = r.token;
+    sessionStorage.setItem("token", token);
+    await mostrar();
+  } catch (e) { avisar(e.message, true); }
+};
+
+$("#salir").onclick = cerrarSesion;
+$("#recargar").onclick = cargar;
+document.querySelectorAll("[data-filtro]").forEach(b => b.onclick = () => {
+  filtro = b.dataset.filtro;
+  document.querySelectorAll("[data-filtro]").forEach(x => x.classList.toggle("activo", x === b));
+  cargar();
+});
+
+mostrar().catch(e => avisar(e.message, true));
+</script>
+</body>
+</html>

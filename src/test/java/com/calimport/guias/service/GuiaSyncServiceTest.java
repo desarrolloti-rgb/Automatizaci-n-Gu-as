@@ -42,12 +42,12 @@ class GuiaSyncServiceTest {
     }
 
     /** Fila tal como la devuelve SAP con el $select acotado. */
-    private ObjectNode fila(int docEntry, long folioNumber, String cardName, String address) {
+    private ObjectNode fila(int docEntry, long folioNumber, String cardName, String direccionDespacho) {
         ObjectNode fila = mapper.createObjectNode();
         fila.put("DocEntry", docEntry);
         fila.put("FolioNumber", folioNumber);
         fila.put("CardName", cardName);
-        fila.put("Address", address);
+        fila.put("Address2", direccionDespacho);
         return fila;
     }
 
@@ -71,7 +71,42 @@ class GuiaSyncServiceTest {
 
         service.sincronizarDesde(DESDE);
 
-        verify(guiaService).sincronizarDesdeSap(1, 187350L, "CORESA S.A.", "SAN NICOLAS 630");
+        verify(guiaService).sincronizarDesdeSap(1, 187350L, "CORESA S.A.", "SAN NICOLAS 630", "");
+    }
+
+    @Test
+    void seUsaLaDireccionDeDespachoYNoLaDeFacturacion() {
+        // Caso real (DocEntry 46261): Address es la de facturacion y Address2 la de
+        // despacho. Usar Address mandaria al repartidor a donde se emite la factura.
+        ObjectNode fila = mapper.createObjectNode();
+        fila.put("DocEntry", 46261);
+        fila.put("FolioNumber", 148L);
+        fila.put("CardName", "ALVARO IDRO RAMIREZ");
+        fila.put("Address", "AV. VICUNA MACKENA 2289\rSAN JOAQUIN, SANTIAGO\rCHILE");
+        fila.put("Address2", "PRUEBA\rSAN JOAQUIN, SANTIAGO\rCHILE");
+
+        when(sapClient.fetchGuiasDeDespacho(DESDE, "")).thenReturn(respuestaCon(fila));
+
+        service.sincronizarDesde(DESDE);
+
+        verify(guiaService).sincronizarDesdeSap(
+                46261, 148L, "ALVARO IDRO RAMIREZ", "PRUEBA, SAN JOAQUIN, SANTIAGO, CHILE", "");
+    }
+
+    @Test
+    void siNoHayDireccionDeDespachoSeCaeALaDeFacturacion() {
+        // Cliente sin direccion de despacho aparte: para el son la misma.
+        ObjectNode fila = mapper.createObjectNode();
+        fila.put("DocEntry", 1);
+        fila.put("FolioNumber", 187350L);
+        fila.put("CardName", "CORESA S.A.");
+        fila.put("Address", "SAN NICOLAS 630, SANTIAGO");
+
+        when(sapClient.fetchGuiasDeDespacho(DESDE, "")).thenReturn(respuestaCon(fila));
+
+        service.sincronizarDesde(DESDE);
+
+        verify(guiaService).sincronizarDesdeSap(1, 187350L, "CORESA S.A.", "SAN NICOLAS 630, SANTIAGO", "");
     }
 
     @Test
@@ -84,7 +119,7 @@ class GuiaSyncServiceTest {
         service.sincronizarDesde(DESDE);
 
         verify(guiaService).sincronizarDesdeSap(
-                1, 187350L, "CORESA S.A.", "SAN NICOLAS #  630, SANTIAGO, CHILE");
+                1, 187350L, "CORESA S.A.", "SAN NICOLAS #  630, SANTIAGO, CHILE", "");
     }
 
     @Test
@@ -98,8 +133,8 @@ class GuiaSyncServiceTest {
 
         assertEquals(3, resultado.sincronizadas());
         assertEquals(0, resultado.descartadas());
-        verify(guiaService).sincronizarDesdeSap(1, 187350L, "Cliente A", "Direccion A");
-        verify(guiaService).sincronizarDesdeSap(3, 187352L, "Cliente C", "Direccion C");
+        verify(guiaService).sincronizarDesdeSap(1, 187350L, "Cliente A", "Direccion A", "");
+        verify(guiaService).sincronizarDesdeSap(3, 187352L, "Cliente C", "Direccion C", "");
     }
 
     @Test
@@ -114,7 +149,7 @@ class GuiaSyncServiceTest {
 
         assertEquals(0, resultado.sincronizadas());
         assertEquals(1, resultado.descartadas());
-        verify(guiaService, never()).sincronizarDesdeSap(anyInt(), any(), any(), any());
+        verify(guiaService, never()).sincronizarDesdeSap(anyInt(), any(), any(), any(), any());
     }
 
     @Test
@@ -126,7 +161,7 @@ class GuiaSyncServiceTest {
         when(sapClient.fetchGuiasDeDespacho(DESDE, "")).thenReturn(respuestaCon(sinFolio));
 
         assertEquals(1, service.sincronizarDesde(DESDE).descartadas());
-        verify(guiaService, never()).sincronizarDesdeSap(anyInt(), any(), any(), any());
+        verify(guiaService, never()).sincronizarDesdeSap(anyInt(), any(), any(), any(), any());
     }
 
     @Test
@@ -152,7 +187,7 @@ class GuiaSyncServiceTest {
         GuiaSyncService.Resultado resultado = service.sincronizarDesde(DESDE);
 
         assertEquals(0, resultado.sincronizadas());
-        verify(guiaService, never()).sincronizarDesdeSap(anyInt(), any(), any(), any());
+        verify(guiaService, never()).sincronizarDesdeSap(anyInt(), any(), any(), any(), any());
     }
 
     @Test
@@ -187,6 +222,19 @@ class GuiaSyncServiceTest {
 
         service.sincronizarDesde(DESDE);
 
-        verify(guiaService).sincronizarDesdeSap(eq(1), eq(187350L), eq(""), eq(""));
+        verify(guiaService).sincronizarDesdeSap(eq(1), eq(187350L), eq(""), eq(""), eq(""));
+    }
+
+    @Test
+    void elComentarioDeSapLlegaEnUnaSolaLinea() {
+        // Ahi el vendedor anota el horario de recepcion; se interpreta recien al armar la ruta.
+        ObjectNode fila = fila(1, 187350L, "CORESA S.A.", "SAN NICOLAS 630");
+        fila.put("Comments", "Recibe solo en la mañana\r\rllamar a Juan antes");
+        when(sapClient.fetchGuiasDeDespacho(DESDE, "")).thenReturn(respuestaCon(fila));
+
+        service.sincronizarDesde(DESDE);
+
+        verify(guiaService).sincronizarDesdeSap(1, 187350L, "CORESA S.A.", "SAN NICOLAS 630",
+                "Recibe solo en la mañana llamar a Juan antes");
     }
 }

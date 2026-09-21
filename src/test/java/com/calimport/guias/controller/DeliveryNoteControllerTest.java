@@ -8,6 +8,7 @@ import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
+import com.calimport.guias.model.Rol;
 import com.calimport.guias.sap.SapClient;
 import com.calimport.guias.sap.SapSessionManager.SapUnauthorizedException;
 import com.calimport.guias.security.JwtTokenProvider;
@@ -42,7 +43,7 @@ class DeliveryNoteControllerTest {
 
     @BeforeEach
     void setUp() {
-        bearer = "Bearer " + jwtTokenProvider.generateToken("juan@calimport.cl", 7, "Juan Perez");
+        bearer = "Bearer " + jwtTokenProvider.generateToken("jefe@calimport.cl", 9, "Jefe Bodega", Rol.JEFE_BODEGA);
         mapper = new ObjectMapper();
     }
 

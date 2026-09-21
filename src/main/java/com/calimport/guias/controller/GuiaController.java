@@ -8,6 +8,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -20,19 +21,25 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.calimport.guias.controller.dto.AsignarRepartidorRequest;
 import com.calimport.guias.controller.dto.CrearGuiaRequest;
+import com.calimport.guias.controller.dto.DefinirHorarioRequest;
 import com.calimport.guias.controller.dto.EntregaRequest;
 import com.calimport.guias.model.EstadoGuia;
 import com.calimport.guias.model.Guia;
 import com.calimport.guias.sap.SapSessionManager.SapUnauthorizedException;
+import com.calimport.guias.security.UsuarioActual;
 import com.calimport.guias.service.GuiaService;
 import com.calimport.guias.service.GuiaSyncService;
 import com.calimport.guias.utils.ApiException;
 
 import jakarta.validation.Valid;
 
+/**
+ * Cada método declara quién puede llamarlo. Bodega (JEFE_BODEGA) importa, asigna y define
+ * horarios; el repartidor resuelve sus guías. Que la guía sea del repartidor que llama lo
+ * valida {@link GuiaService}, no el rol: el rol solo dice qué tipo de operación puede hacer.
+ */
 @RestController
 @RequestMapping("/api/guias")
-@PreAuthorize("isAuthenticated()")
 public class GuiaController {
 
     private static final Logger log = LoggerFactory.getLogger(GuiaController.class);
@@ -53,6 +60,7 @@ public class GuiaController {
      * confirmado, se le puede colgar un {@code @Scheduled}.
      */
     @PostMapping("/sincronizar")
+    @PreAuthorize("hasRole('JEFE_BODEGA')")
     public GuiaSyncService.Resultado sincronizar(
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate desde) {
         LocalDate fecha = desde != null ? desde : LocalDate.now();
@@ -67,53 +75,67 @@ public class GuiaController {
         }
     }
 
-    /** Sin filtros trae todas las guías; con estado o repartidorId, las filtra. */
+    /**
+     * Bodega ve todas (filtrables por estado o repartidor). Un repartidor ve solo las suyas:
+     * el filtro sale de su token, no del query param.
+     */
     @GetMapping
+    @PreAuthorize("isAuthenticated()")
     public List<Guia> listar(
             @RequestParam(required = false) EstadoGuia estado,
-            @RequestParam(required = false) Integer repartidorId) {
-        if (estado != null) {
-            return guiaService.listarPorEstado(estado);
-        }
-        if (repartidorId != null) {
-            return guiaService.listarPorRepartidor(repartidorId);
-        }
-        return guiaService.listar();
+            @RequestParam(required = false) Integer repartidorId,
+            Authentication authentication) {
+        return guiaService.listarPara(UsuarioActual.de(authentication), estado, repartidorId);
     }
 
     @GetMapping("/{id}")
-    public Guia obtenerPorId(@PathVariable Long id) {
-        return guiaService.obtenerPorId(id);
+    @PreAuthorize("isAuthenticated()")
+    public Guia obtenerPorId(@PathVariable Long id, Authentication authentication) {
+        return guiaService.obtenerPara(id, UsuarioActual.de(authentication));
     }
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
+    @PreAuthorize("hasRole('JEFE_BODEGA')")
     public Guia crear(@RequestBody @Valid CrearGuiaRequest request) {
         return guiaService.crear(request.docEntry(), request.folio(), request.cliente(), request.direccion());
     }
 
     @PatchMapping("/{id}/repartidor")
+    @PreAuthorize("hasRole('JEFE_BODEGA')")
     public Guia asignarRepartidor(@PathVariable Long id, @RequestBody AsignarRepartidorRequest request) {
         return guiaService.asignarRepartidor(id, request.repartidorId());
     }
 
+    /** El bodeguero fija o corrige el horario de recepción. Manda sobre el comentario de SAP. */
+    @PatchMapping("/{id}/horario")
+    @PreAuthorize("hasRole('JEFE_BODEGA')")
+    public Guia definirHorario(@PathVariable Long id, @RequestBody DefinirHorarioRequest request) {
+        return guiaService.definirHorario(id, request.ventanaDesde(), request.ventanaHasta(), request.nota());
+    }
+
     @PatchMapping("/{id}/recepcion")
-    public Guia marcarRecibidaPorRepartidor(@PathVariable Long id) {
-        return guiaService.marcarRecibidaPorRepartidor(id);
+    @PreAuthorize("hasRole('REPARTIDOR')")
+    public Guia marcarRecibidaPorRepartidor(@PathVariable Long id, Authentication authentication) {
+        return guiaService.marcarRecibidaPorRepartidor(id, UsuarioActual.de(authentication).employeeId());
     }
 
     @PostMapping("/{id}/entrega")
-    public Guia entregar(@PathVariable Long id, @RequestBody EntregaRequest request) {
-        return guiaService.entregar(id, request.urlFoto(), request.hashFoto());
+    @PreAuthorize("hasRole('REPARTIDOR')")
+    public Guia entregar(@PathVariable Long id, @RequestBody EntregaRequest request, Authentication authentication) {
+        return guiaService.entregar(id, UsuarioActual.de(authentication).employeeId(),
+                request.urlFoto(), request.hashFoto());
     }
 
     @PostMapping("/{id}/rechazo")
-    public Guia rechazar(@PathVariable Long id) {
-        return guiaService.rechazar(id);
+    @PreAuthorize("hasRole('REPARTIDOR')")
+    public Guia rechazar(@PathVariable Long id, Authentication authentication) {
+        return guiaService.rechazar(id, UsuarioActual.de(authentication).employeeId());
     }
 
     @PatchMapping("/{id}/sincronizada")
-    public Guia marcarSincronizada(@PathVariable Long id) {
-        return guiaService.marcarSincronizada(id);
+    @PreAuthorize("hasRole('REPARTIDOR')")
+    public Guia marcarSincronizada(@PathVariable Long id, Authentication authentication) {
+        return guiaService.marcarSincronizada(id, UsuarioActual.de(authentication).employeeId());
     }
 }

@@ -18,4 +18,6 @@ public interface GuiaRepository extends JpaRepository<Guia, Long> {
 
     List<Guia> findByRepartidorId(Integer repartidorId);
 
+    List<Guia> findByRepartidorIdAndEstado(Integer repartidorId, EstadoGuia estado);
+
 }

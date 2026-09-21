@@ -1,5 +1,9 @@
 HELP.md
 target/
+# Base H2 y fotos del perfil local
+data/
+# Build de ../Frontend copiado para que el jar lo sirva: es artefacto, no fuente.
+static/
 .mvn/wrapper/maven-wrapper.jar
 !**/src/main/**/target/
 !**/src/test/**/target/

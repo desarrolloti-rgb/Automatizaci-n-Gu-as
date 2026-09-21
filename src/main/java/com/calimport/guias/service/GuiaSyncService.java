@@ -62,7 +62,8 @@ public class GuiaSyncService {
         }
 
         for (GuiaSap guia : guias) {
-            guiaService.sincronizarDesdeSap(guia.docEntry(), guia.folio(), guia.cliente(), guia.direccion());
+            guiaService.sincronizarDesdeSap(guia.docEntry(), guia.folio(), guia.cliente(), guia.direccion(),
+                    guia.comentario());
         }
 
         log.info("Sincronizacion desde {}: {} guias, {} filas descartadas", desde, guias.size(), descartadas);
@@ -83,7 +84,22 @@ public class GuiaSyncService {
                 fila.get("DocEntry").asInt(),
                 fila.get("FolioNumber").asLong(),
                 textoDe(fila, "CardName"),
-                normalizarDireccion(textoDe(fila, "Address")));
+                normalizarDireccion(direccionDeDespacho(fila)),
+                unirLineas(textoDe(fila, "Comments"), " "));
+    }
+
+    /**
+     * En SAP, {@code Address} es la direccion de <b>facturacion</b> y {@code Address2} la
+     * de <b>despacho</b> — lo confirma el AddressExtension del documento, donde
+     * ShipToStreet coincide con Address2 y BillToStreet con Address. Al repartidor le
+     * sirve la de despacho: usar Address lo mandaria a donde se emite la factura.
+     *
+     * <p>Cuando el cliente no tiene una direccion de despacho aparte, Address2 puede venir
+     * vacia; en ese caso se cae a Address, que para ese cliente son la misma.
+     */
+    private static String direccionDeDespacho(JsonNode fila) {
+        String despacho = textoDe(fila, "Address2");
+        return despacho.isEmpty() ? textoDe(fila, "Address") : despacho;
     }
 
     private static String textoDe(JsonNode fila, String campo) {
@@ -97,13 +113,17 @@ public class GuiaSyncService {
      * separando por comas.
      */
     private static String normalizarDireccion(String direccion) {
-        if (direccion == null || direccion.isBlank()) {
+        return unirLineas(direccion, ", ");
+    }
+
+    private static String unirLineas(String texto, String separador) {
+        if (texto == null || texto.isBlank()) {
             return "";
         }
-        return java.util.Arrays.stream(direccion.split("[\\r\\n]+"))
+        return java.util.Arrays.stream(texto.split("[\\r\\n]+"))
                 .map(String::trim)
                 .filter(parte -> !parte.isEmpty())
-                .reduce((a, b) -> a + ", " + b)
+                .reduce((a, b) -> a + separador + b)
                 .orElse("");
     }
 }
