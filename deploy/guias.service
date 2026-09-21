@@ -1,0 +1,42 @@
+# Servicio systemd para la app. Copiar a /etc/systemd/system/guias.service y:
+#   sudo systemctl daemon-reload && sudo systemctl enable --now guias
+#
+# Por que systemd y no el "nohup java -jar ... &" de Dashboard:
+#   - nohup muere si la VM se reinicia; systemd la levanta sola al arrancar.
+#   - Restart=always la revive si el proceso se cae. Hoy mismo, en desarrollo, el sistema
+#     mato la app por falta de memoria: con nohup habria quedado caida sin que nadie note.
+#   - Los logs van a journalctl con rotacion, en vez de a un app.log que crece sin limite.
+#   - "systemctl restart guias" no puede equivocarse de proceso; un pkill mal escrito si.
+
+[Unit]
+Description=Guias de despacho Calimport
+# La app corre las migraciones de Flyway al arrancar: sin Postgres arriba, no parte.
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=usuario
+WorkingDirectory=/home/usuario/app
+
+# -Xmx512m: a esta app le sobra, y evita que la JVM crezca hasta que el sistema la
+# sacrifique. Subirlo solo si el log muestra presion de memoria de verdad.
+ExecStart=/usr/bin/java -Xmx512m -jar /home/usuario/app/guias-backend-0.0.1-SNAPSHOT.jar --spring.config.location=/home/usuario/app/.env
+
+Restart=always
+RestartSec=10
+
+# Que no reintente para siempre si el fallo es de configuracion: 5 intentos en 5 minutos
+# y se detiene, para que quede evidente en systemctl status en vez de ciclar en silencio.
+StartLimitBurst=5
+StartLimitIntervalSec=300
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=guias
+
+# El .env tiene las credenciales de SAP y de la base: que no lo lea todo el mundo.
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

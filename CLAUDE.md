@@ -211,6 +211,44 @@ vencido".
 otro repartidor no ve ni toca esa guía. La pantalla `local-ui` muestra asignación al jefe
 y retiro/entrega/rechazo al repartidor.
 
+## Despliegue (VM en GCP)
+
+Mismo patrón que Dashboard —un jar y los estáticos en `/home/usuario/app/`, variables en un
+`.env`— con dos diferencias: **el servicio lo maneja systemd** en vez de `nohup` (sobrevive
+al reinicio de la VM y revive si el proceso se cae) y **esta app sí tiene base de datos**.
+Todo lo necesario está en `deploy/`:
+
+| Archivo | Cuándo |
+|---|---|
+| `preparar-vm.sh` | Una vez, con sudo: Java 21, Postgres, base, carpetas y respaldo diario |
+| `env.ejemplo` | Plantilla de `/home/usuario/app/.env` — completar y `chmod 600` |
+| `guias.service` | A `/etc/systemd/system/`, luego `systemctl enable --now guias` |
+| `desplegar.ps1` | Cada despliegue, desde el PC |
+
+```powershell
+.\deploy\desplegar.ps1 -Servidor <ip> -Usuario usuario
+.\deploy\desplegar.ps1 -Servidor <ip> -Usuario usuario -SoloFrontend   # sin recompilar el jar
+```
+
+El script corre los tests, empaquetta, sube y reinicia, y **aborta si algo falla antes de
+subir nada**. Comprueba dos cosas que ya mordieron: que no haya una app local corriendo (el
+jar queda tomado y el repackage deja un archivo de 0,1 MB que parece válido) y que el jar
+pese lo que debe.
+
+**Commitear no despliega**, igual que en Dashboard: un cambio de frontend necesita `pnpm
+build` y subida, aunque el commit ya esté hecho.
+
+**En la VM no se activa el perfil `local`**: se usa el default, que exige todas las
+variables del `.env`. Sin `AUTH_JEFES_BODEGA` nadie puede sincronizar ni asignar, y sin
+`RUTAS_ORIGEN_*` no se pueden generar rutas.
+
+Las **fotos viven en `/var/lib/guias/fotos`**, fuera del directorio de la app para que un
+despliegue no las pise. Junto con la base, son la evidencia de lo que pasó en terreno: el
+respaldo diario que deja `preparar-vm.sh` guarda 14 días, pero **queda en la misma VM** —
+falta copiarlo a un bucket, porque un respaldo local no sirve si se pierde la máquina.
+
+Para diagnosticar: `systemctl status guias` y `journalctl -u guias -n 50 -f`.
+
 ## Tests
 
 Es el repo con mejor cobertura de los tres: hay tests de controller, service, repository
