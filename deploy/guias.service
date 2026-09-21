@@ -1,33 +1,36 @@
-# Servicio systemd para la app. Copiar a /etc/systemd/system/guias.service y:
+# Servicio systemd de Despachos-Guias. Copiar a /etc/systemd/system/guias.service y:
 #   sudo systemctl daemon-reload && sudo systemctl enable --now guias
 #
-# Por que systemd y no el "nohup java -jar ... &" de Dashboard:
-#   - nohup muere si la VM se reinicia; systemd la levanta sola al arrancar.
-#   - Restart=always la revive si el proceso se cae. Hoy mismo, en desarrollo, el sistema
-#     mato la app por falta de memoria: con nohup habria quedado caida sin que nadie note.
-#   - Los logs van a journalctl con rotacion, en vez de a un app.log que crece sin limite.
-#   - "systemctl restart guias" no puede equivocarse de proceso; un pkill mal escrito si.
+# Convive con panel-facturadores en la VM "apps", detras del mismo nginx:
+# https://apps.calimport.cl/gd/ -> nginx quita el prefijo -> este servicio en :8080.
+#
+# Mismo criterio que el panel: usuario propio sin privilegios, codigo de root y solo
+# lectura para la app, y credenciales en un .env que solo ese usuario puede leer. Si
+# alguien vulnera una de las dos aplicaciones, no llega a la otra.
 
 [Unit]
-Description=Guias de despacho Calimport
-# La app corre las migraciones de Flyway al arrancar: sin Postgres arriba, no parte.
+Description=Despachos - guias cedibles firmadas
+# Flyway corre las migraciones al arrancar: sin Postgres arriba, no parte.
 After=network-online.target postgresql.service
 Wants=network-online.target
 
 [Service]
 Type=simple
-User=usuario
-WorkingDirectory=/home/usuario/app
+User=guias
+Group=guias
+WorkingDirectory=/opt/guias
 
-# -Xmx512m: a esta app le sobra, y evita que la JVM crezca hasta que el sistema la
-# sacrifique. Subirlo solo si el log muestra presion de memoria de verdad.
-ExecStart=/usr/bin/java -Xmx512m -jar /home/usuario/app/guias-backend-0.0.1-SNAPSHOT.jar --spring.config.location=/home/usuario/app/.env
+# Escucha solo en loopback: a internet se sale por nginx, nunca directo al 8080.
+# -Xmx512m porque la VM es e2-small y comparte los 2 GB con el panel y con Postgres.
+ExecStart=/usr/bin/java -Xmx512m -jar /opt/guias/guias-backend.jar \
+    --spring.config.location=/opt/guias/.env \
+    --server.address=127.0.0.1 \
+    --server.port=8080
 
 Restart=always
 RestartSec=10
-
-# Que no reintente para siempre si el fallo es de configuracion: 5 intentos en 5 minutos
-# y se detiene, para que quede evidente en systemctl status en vez de ciclar en silencio.
+# Que no reintente para siempre si el fallo es de configuracion: queda visible en
+# systemctl status en vez de ciclar en silencio.
 StartLimitBurst=5
 StartLimitIntervalSec=300
 
@@ -35,7 +38,13 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=guias
 
-# El .env tiene las credenciales de SAP y de la base: que no lo lea todo el mundo.
+# Endurecimiento: la app no necesita nada de esto para funcionar.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+# Lo unico que escribe: las fotos de entrega, que son la evidencia.
+ReadWritePaths=/var/lib/guias
 UMask=0077
 
 [Install]

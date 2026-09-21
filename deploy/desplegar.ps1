@@ -1,28 +1,25 @@
 <#
 .SYNOPSIS
-  Despliega Guias a la VM: compila, sube el jar y los estaticos, y reinicia el servicio.
+  Despliega Despachos-Guias en la VM "apps": compila, sube y reinicia el servicio.
 
 .DESCRIPTION
-  Mismo flujo que Dashboard, pero en un script en vez de a mano. La diferencia importa:
-  el paso que mas falla es empaquetar con la app local corriendo, porque el jar queda
-  tomado y el repackage deja un archivo de 0,1 MB que parece valido hasta que no arranca
-  en la VM. Aca eso se detecta antes de subir nada.
+  La app vive en https://apps.calimport.cl/gd/, detras del nginx que comparte con el
+  Dashboard Logistica. El jar y los estaticos van a /opt/guias/.
 
-  El frontend NO viaja dentro del jar: se copia aparte a static/, igual que en Dashboard,
-  para poder actualizar la pantalla sin recompilar el backend.
+  Todo pasa por el tunel IAP de Google: la VM no acepta SSH desde internet, asi que no
+  sirven scp ni ssh a secas.
+
+  El paso que mas falla es empaquetar con la app local corriendo: el jar queda tomado y
+  el repackage deja un archivo de 0,1 MB que parece valido hasta que no arranca en la VM.
+  Aca eso se detecta antes de subir nada.
 
 .EXAMPLE
-  .\deploy\desplegar.ps1 -Servidor 34.x.x.x -Usuario usuario
-  .\deploy\desplegar.ps1 -Servidor 34.x.x.x -Usuario usuario -SoloFrontend
-
-.NOTES
-  El parametro es -Servidor y no -Host a proposito: $Host es una variable automatica de
-  PowerShell (la consola) y declararla como parametro revienta el script.
+  .\deploy\desplegar.ps1
+  .\deploy\desplegar.ps1 -SoloFrontend
 #>
 param(
-  [Parameter(Mandatory = $true)][string]$Servidor,
-  [string]$Usuario = 'usuario',
-  [string]$Llave,
+  [string]$Vm = 'apps',
+  [string]$Zona = 'us-east1-b',
   [switch]$SoloFrontend
 )
 
@@ -30,10 +27,10 @@ $ErrorActionPreference = 'Stop'
 $raiz = Split-Path $PSScriptRoot -Parent
 $frontend = Join-Path (Split-Path $raiz -Parent) 'Frontend'
 $jar = Join-Path $raiz 'target\guias-backend-0.0.1-SNAPSHOT.jar'
-$destino = "${Usuario}@${Servidor}"
-$scp = if ($Llave) { @('-i', $Llave) } else { @() }
+$iap = @('--zone', $Zona, '--tunnel-through-iap')
 
 function Paso($texto) { Write-Host "`n>>> $texto" -ForegroundColor Cyan }
+function EnLaVm($comando) { & gcloud compute ssh $Vm @iap --command $comando }
 
 if (-not $SoloFrontend) {
   Paso 'Comprobando que no haya una app local con el jar tomado'
@@ -41,7 +38,7 @@ if (-not $SoloFrontend) {
     Where-Object { $_.CommandLine -match 'guias-backend' }
   if ($tomado) {
     throw "Hay una instancia local corriendo (pid $($tomado.ProcessId -join ', ')). " +
-          "Cerrala antes de empaquetar o el repackage deja un jar truncado."
+          'Cerrala antes de empaquetar o el repackage deja un jar truncado.'
   }
 
   Paso 'Tests'
@@ -59,37 +56,52 @@ if (-not $SoloFrontend) {
   Pop-Location
   if ($LASTEXITCODE -ne 0) { throw 'Fallo el empaquetado.' }
 
-  # El jar completo ronda los 68 MB. Si sale de ~0,1 MB el repackage fallo y la VM
-  # recibiria un archivo que no arranca.
   $mb = [math]::Round((Get-Item $jar).Length / 1MB, 1)
   if ($mb -lt 50) { throw "El jar pesa $mb MB: el repackage fallo. No se sube." }
   Write-Host "    jar: $mb MB"
 }
 
-Paso 'Compilando el frontend'
+# Produccion compila con baseHref /gd/ y la API en /gd/api (angular.json y
+# environment.prod.ts). Un build de desarrollo serviria la app en la raiz y las
+# rutas quedarian rotas detras del prefijo.
+Paso 'Compilando el frontend (configuracion de produccion)'
 Push-Location $frontend
 & pnpm build
 Pop-Location
 if ($LASTEXITCODE -ne 0) { throw 'Fallo el build del frontend.' }
+$base = Select-String -Path "$frontend\dist\guias-frontend\browser\index.html" -Pattern '<base href="/gd/">'
+if (-not $base) { throw 'El index no quedo con baseHref /gd/: revisar angular.json.' }
 
 Paso 'Subiendo'
+# A la carpeta del usuario primero: /opt/guias es de root y scp no puede escribir ahi.
 if (-not $SoloFrontend) {
-  & scp @scp $jar "${destino}:/home/$Usuario/app/"
-  if ($LASTEXITCODE -ne 0) { throw 'Fallo el scp del jar.' }
+  & gcloud compute scp $jar "${Vm}:~/guias-backend.jar" @iap
+  if ($LASTEXITCODE -ne 0) { throw 'Fallo la subida del jar.' }
 }
-# El * y no la carpeta: se reemplaza el contenido, no se anida static/browser dentro.
-& scp @scp -r "$frontend\dist\guias-frontend\browser\*" "${destino}:/home/$Usuario/app/static/"
-if ($LASTEXITCODE -ne 0) { throw 'Fallo el scp de los estaticos.' }
+& gcloud compute scp --recurse "$frontend\dist\guias-frontend\browser" "${Vm}:~/static-nuevo" @iap
+if ($LASTEXITCODE -ne 0) { throw 'Fallo la subida de los estaticos.' }
 
-if ($SoloFrontend) {
-  Write-Host "`nListo. Los estaticos se leen del disco en cada request: no hace falta reiniciar." -ForegroundColor Green
-  return
-}
-
-Paso 'Reiniciando el servicio'
-& ssh @scp $destino 'sudo systemctl restart guias && sleep 8 && systemctl is-active guias'
+Paso 'Instalando y reiniciando'
+# Los estaticos se reemplazan enteros: un build deja archivos con hash nuevo y los
+# viejos solo estorban. El jar se mueve con el servicio detenido.
+$instalar = @'
+set -e
+sudo rm -rf /opt/guias/static
+sudo mv ~/static-nuevo /opt/guias/static
+sudo chown -R root:root /opt/guias/static
+if [ -f ~/guias-backend.jar ]; then
+  sudo systemctl stop guias
+  sudo mv ~/guias-backend.jar /opt/guias/guias-backend.jar
+  sudo chown root:root /opt/guias/guias-backend.jar
+fi
+sudo systemctl restart guias
+sleep 8
+systemctl is-active guias
+'@
+EnLaVm $instalar
 if ($LASTEXITCODE -ne 0) { throw 'El servicio no quedo activo. Revisar: journalctl -u guias -n 50' }
 
 Paso 'Comprobando'
-& ssh @scp $destino 'curl -s -o /dev/null -w "raiz:%{http_code} " http://localhost:8080/ && curl -s -o /dev/null -w "api-sin-token:%{http_code}\n" http://localhost:8080/api/guias'
+EnLaVm 'curl -s -o /dev/null -w "raiz:%{http_code} " http://127.0.0.1:8080/ ; curl -s -o /dev/null -w "api-sin-token:%{http_code}\n" http://127.0.0.1:8080/api/guias'
 Write-Host "`nDesplegado. Se espera raiz:200 api-sin-token:401" -ForegroundColor Green
+Write-Host "Desde afuera: https://apps.calimport.cl/gd/" -ForegroundColor Green
