@@ -108,6 +108,41 @@ para no reventar más tarde con un "column does not exist".
 - Los campos que genera la app —repartidor, estado, foto— no se tocan en la sincronización.
 - `EstadoGuia` tiene sólo tres valores: `PENDIENTE` → `ENTREGADA` | `RECHAZADA`.
 
+**SAP es la fuente de verdad del ciclo de última milla; Postgres amortigua la mala señal.**
+El estado vive en SAP en cuatro UDF de `DeliveryNotes`, y la app los mantiene al día:
+
+| UDF | Qué lleva |
+|---|---|
+| `U_EstadoLog` | `P` pendiente · `T` tomada · `E` entregada · `R` rechazada |
+| `U_Despachador` | Nombre de quien la lleva. Se limpia al volver a `P` |
+| `U_UrlFoto` | La evidencia de la entrega, absoluta (`guias.url-publica` + la ruta) |
+| `U_MotivoRech` | Por qué la rechazaron. Se limpia al volver a `P` |
+
+**Los cuatro estados de SAP son tres de la app más un booleano**, no un modelo distinto:
+`P` es PENDIENTE sin retirar y `T` es PENDIENTE con `recibidaPorRepartidor`. `EstadoLogistico`
+lo traduce al momento de enviar. No se guarda un cuarto valor en `EstadoGuia` a propósito:
+sería una segunda representación del mismo hecho, y dos copias de un dato se desincronizan.
+
+**El orden importa: primero Postgres, después SAP.** El repartidor trabaja en la calle y el
+Service Layer no siempre contesta; si la entrega dependiera de que SAP responda en ese
+instante, una caída de red le impediría cerrar una guía que ya entregó. `GuiaService`
+guarda, `SincronizacionSapService` empuja, y **si el empuje falla no lanza**: la guía queda
+con `sincronizada = false` y un `@Scheduled` reintenta cada dos minutos. El PATCH manda el
+estado completo, así que reintentarlo de más es inofensivo.
+
+`sincronizada` **nace en true**: una guía recién importada no tiene nada que contarle a SAP,
+que ya la creó como `P`. Lo que está en false es, literalmente, lo que SAP todavía no sabe.
+
+**La sincronización desde SAP solo trae `U_EstadoLog eq 'P'` y `DocumentStatus eq 'bost_Open'`**:
+las que ya están en T, E o R salieron de esta app y volver a importarlas arriesga pisar lo
+que el repartidor hizo en terreno.
+
+**La reapertura (`PATCH /api/guias/{id}/reapertura`, flujo R → P)** es la única excepción a
+que una guía resuelta no se toca, y es del jefe de bodega. No reescribe lo que pasó: decide
+volver a intentarlo, limpiando despachador y motivo. Una ENTREGADA no se reabre — ahí el
+cliente firmó y hay una foto que lo prueba. **Se pierde el motivo del rechazo anterior**,
+porque el flujo de SAP lo deja en null; si hace falta ese historial, es una tabla aparte.
+
 **Rutas (`RutaService`)**: el bodeguero manda las guías del día de un repartidor con la hora
 de salida (`POST /api/rutas`). Se geocodifican las que no tienen coordenadas
 (`Geocodificador`), se interpreta el `Comments` de SAP en horario (`InterpreteComentarios`)
@@ -157,8 +192,8 @@ todas.
 y repartidor) · `POST /api/guias` · `PATCH /api/guias/{id}/repartidor` ·
 `PATCH /api/guias/{id}/recepcion` · `POST /api/guias/{id}/entrega` ·
 `POST /api/guias/{id}/rechazo` · `PATCH /api/guias/{id}/sincronizada` ·
-`PATCH /api/guias/{id}/horario` · `POST /api/rutas` · `GET /api/rutas?repartidorId=&fecha=` ·
-`GET /api/rutas/mia?fecha=`.
+`PATCH /api/guias/{id}/horario` · `PATCH /api/guias/{id}/reapertura` (R → P, bodega) ·
+`POST /api/rutas` · `GET /api/rutas?repartidorId=&fecha=` · `GET /api/rutas/mia?fecha=`.
 Cada método declara su `@PreAuthorize` (ver "Roles"); un endpoint nuevo sin anotación
 queda abierto a cualquier usuario logueado.
 

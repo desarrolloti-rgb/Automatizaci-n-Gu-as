@@ -20,4 +20,7 @@ public interface GuiaRepository extends JpaRepository<Guia, Long> {
 
     List<Guia> findByRepartidorIdAndEstado(Integer repartidorId, EstadoGuia estado);
 
+    /** Las que cambiaron en la app y todavía no llegaron a SAP, para reintentar el envío. */
+    List<Guia> findBySincronizadaFalse();
+
 }

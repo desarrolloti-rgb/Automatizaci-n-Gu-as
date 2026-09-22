@@ -44,11 +44,19 @@ class GuiaServiceTest {
     @Mock
     private GuiaRepository guiaRepository;
 
+    /**
+     * El envío a SAP se simula: acá se prueban las reglas de negocio, no la integración.
+     * Que el mock no haga nada representa bien la realidad —el envío es best-effort y no
+     * puede alterar el resultado local— y además deja comprobable que se lo llamó.
+     */
+    @Mock
+    private SincronizacionSapService sincronizacionSap;
+
     private GuiaService service;
 
     @BeforeEach
     void setUp() {
-        service = new GuiaService(guiaRepository);
+        service = new GuiaService(guiaRepository, sincronizacionSap);
     }
 
     /** Guía tal como queda recién creada: PENDIENTE, sin repartidor ni evidencia. */
@@ -89,7 +97,9 @@ class GuiaServiceTest {
         assertNull(creada.getUrlFoto());
         assertNull(creada.getHashFoto());
         assertFalse(creada.isRecibidaPorRepartidor());
-        assertFalse(creada.isSincronizada());
+        // Nace sincronizada: SAP ya la tiene como 'P' y no hay nada que contarle. El flag
+        // baja a false recién cuando la app cambia el estado y ese cambio no ha llegado.
+        assertTrue(creada.isSincronizada());
     }
 
     @Test
@@ -652,18 +662,80 @@ class GuiaServiceTest {
         verify(guiaRepository, never()).save(any());
     }
 
-    // --- marcarSincronizada ---
+    // --- sincronización con SAP ---
 
     @Test
-    void marcarSincronizadaLevantaElFlagSinTocarElEstado() {
+    void reintentarSincronizacionVuelveAEmpujarLaGuiaASap() {
+        Guia entregada = guiaConRepartidor();
+        entregada.setEstado(EstadoGuia.ENTREGADA);
+        entregada.setSincronizada(false);
+        when(guiaRepository.findById(1L)).thenReturn(Optional.of(entregada));
+
+        service.reintentarSincronizacion(1L);
+
+        // No levanta el flag por su cuenta: eso lo decide el envío según si SAP contestó.
+        // Marcarla sincronizada sin haberla enviado seria mentir y nadie reintentaria.
+        verify(sincronizacionSap).empujar(entregada);
+        assertFalse(entregada.isSincronizada());
+    }
+
+    @Test
+    void cadaCambioDeEstadoSeEmpujaASapYQuedaMarcadoHastaQueLlegue() {
+        when(guiaRepository.findById(1L)).thenReturn(Optional.of(guiaConRepartidor()));
+        devuelveLoQueGuarda();
+
+        Guia resultado = service.rechazar(1L, 7, "No estaba el encargado");
+
+        verify(sincronizacionSap).empujar(resultado);
+        // El envío es un mock que no hace nada: queda como quedaría si SAP no contestara.
+        assertFalse(resultado.isSincronizada());
+    }
+
+    // --- reabrir (flujo R -> P del jefe de bodega) ---
+
+    @Test
+    void reabrirDevuelveUnaRechazadaAPendienteYLaDejaSinDuenoNiMotivo() {
+        Guia rechazada = guiaConRepartidor();
+        rechazada.setEstado(EstadoGuia.RECHAZADA);
+        rechazada.setMotivoRechazo("No tenían espacio");
+        rechazada.setFechaEntrega(Instant.now());
+        rechazada.setRecibidaPorRepartidor(true);
+        rechazada.setFechaRecepcionRepartidor(Instant.now());
+        when(guiaRepository.findById(1L)).thenReturn(Optional.of(rechazada));
+        devuelveLoQueGuarda();
+
+        Guia resultado = service.reabrir(1L);
+
+        assertEquals(EstadoGuia.PENDIENTE, resultado.getEstado());
+        assertNull(resultado.getMotivoRechazo());
+        assertNull(resultado.getFechaEntrega());
+        // Sin repartidor y sin retirar: bodega la puede reasignar a otro.
+        assertNull(resultado.getRepartidorId());
+        assertFalse(resultado.isRecibidaPorRepartidor());
+        assertNull(resultado.getFechaRecepcionRepartidor());
+        verify(sincronizacionSap).empujar(resultado);
+    }
+
+    @Test
+    void reabrirUnaEntregadaEsConflict() {
         Guia entregada = guiaConRepartidor();
         entregada.setEstado(EstadoGuia.ENTREGADA);
         when(guiaRepository.findById(1L)).thenReturn(Optional.of(entregada));
-        devuelveLoQueGuarda();
 
-        Guia resultado = service.marcarSincronizada(1L, 7);
+        ApiException e = assertThrows(ApiException.class, () -> service.reabrir(1L));
 
-        assertTrue(resultado.isSincronizada());
-        assertEquals(EstadoGuia.ENTREGADA, resultado.getEstado());
+        // El cliente firmó y hay una foto que lo prueba: eso no se deshace.
+        assertEquals(HttpStatus.CONFLICT, e.getStatus());
+        verify(guiaRepository, never()).save(any());
+    }
+
+    @Test
+    void reabrirUnaPendienteEsConflict() {
+        when(guiaRepository.findById(1L)).thenReturn(Optional.of(guiaConRepartidor()));
+
+        ApiException e = assertThrows(ApiException.class, () -> service.reabrir(1L));
+
+        assertEquals(HttpStatus.CONFLICT, e.getStatus());
+        verify(guiaRepository, never()).save(any());
     }
 }

@@ -1,7 +1,9 @@
 package com.calimport.guias.sap;
 
 import java.time.LocalDate;
+import java.util.Map;
 
+import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 
 import tools.jackson.databind.JsonNode;
@@ -31,7 +33,15 @@ public class SapClient {
     public JsonNode fetchGuiasDeDespacho(LocalDate desde, String filtroExtra) {
         // Se arma de una sola vez: la lambda de abajo solo puede capturar variables que no
         // se reasignan ("effectively final"), asi que un filter += aca no compila.
-        String porFecha = "DocDate ge '" + desde + "'";
+        //
+        // Ademas de la fecha se piden dos condiciones del ciclo de ultima milla:
+        //  - U_EstadoLog eq 'P': solo las que nadie tomo todavia. Las que ya estan en T, E
+        //    o R salieron de esta app y ya viven en Postgres; volver a importarlas no
+        //    aporta y arriesga pisar lo que el repartidor hizo en terreno.
+        //  - DocumentStatus eq 'bost_Open': la guia sigue abierta contablemente. Una
+        //    cerrada o anulada en SAP no se reparte.
+        String porFecha = "DocDate ge '" + desde + "'"
+                + " and U_EstadoLog eq 'P' and DocumentStatus eq 'bost_Open'";
         String filter = (filtroExtra == null || filtroExtra.isBlank())
                 ? porFecha
                 : porFecha + " and (" + filtroExtra + ")";
@@ -64,6 +74,35 @@ public class SapClient {
                         .header("Cookie", cookie)
                         .retrieve()
                         .body(JsonNode.class));
+    }
+
+    /**
+     * Escribe el estado logístico de una guía en SAP, que es la fuente de verdad: Postgres
+     * solo amortigua la mala señal mientras el dato llega hasta acá.
+     *
+     * <p>Va por PATCH y no por PUT: PUT reemplazaría el documento completo y borraría todo
+     * lo que no venga en el cuerpo. Acá se tocan únicamente los UDF del ciclo de última
+     * milla, y el resto de la guía queda intacto.
+     *
+     * <p>Un valor {@code null} en el mapa se envía como null de JSON y limpia el campo en
+     * SAP: es lo que necesita el reset del jefe de bodega, que devuelve una guía rechazada
+     * a pendiente dejando despachador y motivo en blanco. Por eso el mapa se arma con
+     * {@link java.util.HashMap} y no con {@code Map.of}, que no admite nulls.
+     *
+     * <p>Service Layer responde 204 sin cuerpo, así que no hay nada que deserializar.
+     */
+    public void actualizarEstadoLogistico(int docEntry, Map<String, Object> campos) {
+        sessionManager.executeWithSession(cookie -> {
+            sessionManager.getRestClient()
+                    .patch()
+                    .uri("/DeliveryNotes({docEntry})", docEntry)
+                    .header("Cookie", cookie)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(campos)
+                    .retrieve()
+                    .toBodilessEntity();
+            return null;
+        });
     }
 
     /** Igual que en Dashboard: busca en EmployeesInfo por eMail, solo activos. */

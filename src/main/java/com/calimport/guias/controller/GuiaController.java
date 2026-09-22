@@ -136,9 +136,24 @@ public class GuiaController {
         return guiaService.rechazar(id, UsuarioActual.de(authentication).employeeId(), request.motivo());
     }
 
+    /**
+     * Devuelve a PENDIENTE una guía rechazada, para reintentar el despacho. En SAP es el
+     * flujo R → P. Solo bodega: no es deshacer el rechazo del repartidor, es decidir que se
+     * vuelve a intentar.
+     */
+    @PatchMapping("/{id}/reapertura")
+    @PreAuthorize("hasRole('JEFE_BODEGA')")
+    public Guia reabrir(@PathVariable Long id) {
+        return guiaService.reabrir(id);
+    }
+
+    /**
+     * Fuerza el envío a SAP de una guía que quedó pendiente de sincronizar. Es de bodega y
+     * no del repartidor: es una acción de operación sobre la integración, no del reparto.
+     */
     @PatchMapping("/{id}/sincronizada")
-    @PreAuthorize("hasRole('REPARTIDOR')")
-    public Guia marcarSincronizada(@PathVariable Long id, Authentication authentication) {
-        return guiaService.marcarSincronizada(id, UsuarioActual.de(authentication).employeeId());
+    @PreAuthorize("hasRole('JEFE_BODEGA')")
+    public Guia reintentarSincronizacion(@PathVariable Long id) {
+        return guiaService.reintentarSincronizacion(id);
     }
 }

@@ -20,9 +20,26 @@ import com.calimport.guias.utils.ApiException;
 public class GuiaService {
 
     private GuiaRepository guiaRepository;
+    private final SincronizacionSapService sincronizacionSap;
 
-    public GuiaService(GuiaRepository guiaRepository) {
+    public GuiaService(GuiaRepository guiaRepository, SincronizacionSapService sincronizacionSap) {
         this.guiaRepository = guiaRepository;
+        this.sincronizacionSap = sincronizacionSap;
+    }
+
+    /**
+     * Guarda el cambio y lo refleja en SAP, en ese orden.
+     *
+     * <p>Primero Postgres porque es lo que no puede perderse: el repartidor ya entregó y
+     * esa evidencia tiene que quedar aunque el Service Layer esté caído. El envío a SAP no
+     * lanza si falla — deja la guía marcada para reintento (ver
+     * {@link SincronizacionSapService}).
+     */
+    private Guia guardarYReflejar(Guia guia) {
+        guia.setSincronizada(false);
+        Guia guardada = guiaRepository.save(guia);
+        sincronizacionSap.empujar(guardada);
+        return guardada;
     }
 
     /** Da de alta una guía a partir de los datos que vienen de SAP. */
@@ -223,7 +240,10 @@ public class GuiaService {
         return guiaRepository.save(guia);
     }
 
-    // El repartidor confirma que retiró la guía para salir a reparto. */
+    /**
+     * El repartidor confirma que retiró la guía para salir a reparto. Es el paso que en
+     * SAP mueve {@code U_EstadoLog} de P a T y deja su nombre en {@code U_Despachador}.
+     */
     @Transactional
     public Guia marcarRecibidaPorRepartidor(Long id, int repartidorId) {
         Guia guia = obtenerPropia(id, repartidorId);
@@ -232,7 +252,7 @@ public class GuiaService {
         }
         guia.setRecibidaPorRepartidor(true);
         guia.setFechaRecepcionRepartidor(Instant.now());
-        return guiaRepository.save(guia);
+        return guardarYReflejar(guia);
     }
 
     // Cliente recibió todo y firmó: se guarda la evidencia fotográfica. */
@@ -250,7 +270,7 @@ public class GuiaService {
         guia.setFechaEntrega(Instant.now());
         guia.setUrlFoto(urlFoto);
         guia.setHashFoto(hashFoto);
-        return guiaRepository.save(guia);
+        return guardarYReflejar(guia);
     }
 
     /**
@@ -268,15 +288,53 @@ public class GuiaService {
         guia.setEstado(EstadoGuia.RECHAZADA);
         guia.setFechaEntrega(Instant.now());
         guia.setMotivoRechazo(motivoLimpio);
-        return guiaRepository.save(guia);
+        return guardarYReflejar(guia);
     }
 
-    // Marca que el resultado (entrega o rechazo) ya viajó de vuelta a SAP. */
+    /**
+     * El jefe de bodega devuelve a pendiente una guía rechazada, para reintentar el
+     * despacho otro día. En SAP es el flujo R → P, que limpia despachador y motivo.
+     *
+     * <p>Es la <b>única</b> excepción a que una guía resuelta no se toca, y es deliberada:
+     * no se está reescribiendo lo que pasó, se está decidiendo volver a intentarlo. Por eso
+     * queda en manos del jefe de bodega y no del repartidor, y por eso una ENTREGADA no se
+     * puede reabrir: ahí el cliente ya firmó y existe una foto que lo prueba.
+     *
+     * <p>Se pierde el motivo del rechazo anterior, porque el flujo de SAP lo deja en null y
+     * las dos copias tienen que decir lo mismo. Si mañana hace falta ese historial, es una
+     * tabla aparte: no se puede reconstruir de acá.
+     */
     @Transactional
-    public Guia marcarSincronizada(Long id, int repartidorId) {
-        Guia guia = obtenerPropia(id, repartidorId);
-        guia.setSincronizada(true);
-        return guiaRepository.save(guia);
+    public Guia reabrir(Long id) {
+        Guia guia = obtenerPorId(id);
+        if (guia.getEstado() != EstadoGuia.RECHAZADA) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                    "Solo se puede reabrir una guía RECHAZADA (esta está " + guia.getEstado() + ")");
+        }
+        guia.setEstado(EstadoGuia.PENDIENTE);
+        guia.setMotivoRechazo(null);
+        guia.setFechaEntrega(null);
+        // Vuelve a estar por retirar y sin dueño: bodega puede reasignarla a otro.
+        guia.setRepartidorId(null);
+        guia.setRecibidaPorRepartidor(false);
+        guia.setFechaRecepcionRepartidor(null);
+        return guardarYReflejar(guia);
+    }
+
+    /**
+     * Fuerza el envío a SAP de una guía que quedó sin sincronizar, sin esperar al reintento
+     * automático. Es una herramienta de operación para el jefe de bodega cuando SAP volvió
+     * y no quiere esperar los minutos del ciclo.
+     *
+     * <p>Antes este método solo levantaba el flag a mano, cuando el envío no existía. Ahora
+     * que el envío es real, marcarla sincronizada sin haberla enviado sería mentir: la
+     * guía se daría por reflejada en SAP sin estarlo, y nadie volvería a intentarlo.
+     */
+    @Transactional
+    public Guia reintentarSincronizacion(Long id) {
+        Guia guia = obtenerPorId(id);
+        sincronizacionSap.empujar(guia);
+        return guia;
     }
 
     private void validarQuePuedaResolverse(Guia guia) {

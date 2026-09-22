@@ -97,8 +97,17 @@ public class Guia {
 
     // --- Sincronización con SAP ---
 
+    /**
+     * Si el estado logístico de esta guía ya está reflejado en SAP, que es la fuente de
+     * verdad del ciclo.
+     *
+     * <p>Nace en <b>true</b>: una guía recién importada no tiene nada que contarle a SAP,
+     * que ya la creó con {@code U_EstadoLog = 'P'}. Pasa a false recién cuando la app la
+     * cambia (retiro, entrega, rechazo o reapertura) y vuelve a true cuando ese cambio
+     * llega. Lo que queda en false es, literalmente, lo que SAP todavía no sabe.
+     */
     @Column(nullable = false)
-    private boolean sincronizada;
+    private boolean sincronizada = true;
 
     // --- constructores ---
 

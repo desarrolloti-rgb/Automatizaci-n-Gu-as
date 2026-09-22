@@ -31,6 +31,7 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -360,13 +361,30 @@ class GuiaControllerTest {
     }
 
     @Test
-    void marcarSincronizadaDevuelve200() throws Exception {
-        when(guiaService.marcarSincronizada(1L, 7)).thenReturn(guia());
+    void reintentarSincronizacionEsDeBodegaYNoDelRepartidor() throws Exception {
+        when(guiaService.reintentarSincronizacion(1L)).thenReturn(guia());
 
-        mockMvc.perform(patch("/api/guias/1/sincronizada").header("Authorization", repartidor))
+        mockMvc.perform(patch("/api/guias/1/sincronizada").header("Authorization", jefe))
                 .andExpect(status().isOk());
+        // Reenviar a SAP es operación de la integración, no parte del reparto.
+        mockMvc.perform(patch("/api/guias/1/sincronizada").header("Authorization", repartidor))
+                .andExpect(status().isForbidden());
 
-        verify(guiaService).marcarSincronizada(1L, 7);
+        verify(guiaService, times(1)).reintentarSincronizacion(1L);
+    }
+
+    // --- reapertura (flujo R -> P) ---
+
+    @Test
+    void reabrirEsDeBodegaYNoDelRepartidor() throws Exception {
+        when(guiaService.reabrir(1L)).thenReturn(guia());
+
+        mockMvc.perform(patch("/api/guias/1/reapertura").header("Authorization", jefe))
+                .andExpect(status().isOk());
+        mockMvc.perform(patch("/api/guias/1/reapertura").header("Authorization", repartidor))
+                .andExpect(status().isForbidden());
+
+        verify(guiaService, times(1)).reabrir(1L);
     }
 
     // --- sincronizacion desde SAP ---
