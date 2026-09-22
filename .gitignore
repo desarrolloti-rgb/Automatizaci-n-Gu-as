@@ -1,5 +1,9 @@
 HELP.md
 target/
+# Credenciales reales (SAP, base, JWT). deploy/env.ejemplo es la plantilla que si va.
+.env
+.env.*
+!.env.ejemplo
 # Base H2 y fotos del perfil local
 data/
 # Build de ../Frontend copiado para que el jar lo sirva: es artefacto, no fuente.
