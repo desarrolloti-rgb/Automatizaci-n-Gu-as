@@ -37,12 +37,20 @@ public class SapClient {
         // DocumentStatus eq 'bost_Open' va siempre: la guia tiene que seguir abierta
         // contablemente, y una cerrada o anulada en SAP no se reparte.
         //
-        // U_EstadoLog eq 'P' (solo las que nadie tomo todavia) va unicamente si el UDF
-        // existe en esta instalacion. Pedirlo cuando no existe no devuelve vacio: SAP
-        // responde 400 "Property 'U_EstadoLog' of 'Document' is invalid" y la
-        // sincronizacion completa se cae. Comprobado contra el Service Layer real.
+        // El estado logistico se pide solo si el UDF existe en esta instalacion. Pedirlo
+        // cuando no existe no devuelve vacio: SAP responde 400 "Property 'U_EstadoLog' of
+        // 'Document' is invalid" y la sincronizacion completa se cae. Comprobado contra el
+        // Service Layer real (existe en CALIMPORT_TEST, no en CALIMPORT_PRODUCTIVO).
+        //
+        // Se acepta null ademas de 'P' porque en la practica los documentos llegan con el
+        // campo vacio: el valor por defecto del UDF no esta aplicado, y de todas formas los
+        // documentos anteriores a que se creara el campo nunca lo van a tener. Una guia que
+        // esta app nunca toco esta pendiente, se llame null o 'P'. Sin esto la
+        // sincronizacion trae cero guias, que es lo que paso al probarlo.
         String base = "DocDate ge '" + desde + "' and DocumentStatus eq 'bost_Open'";
-        String porFecha = conEstadoLogistico ? base + " and U_EstadoLog eq 'P'" : base;
+        String porFecha = conEstadoLogistico
+                ? base + " and (U_EstadoLog eq 'P' or U_EstadoLog eq null)"
+                : base;
         String filter = (filtroExtra == null || filtroExtra.isBlank())
                 ? porFecha
                 : porFecha + " and (" + filtroExtra + ")";

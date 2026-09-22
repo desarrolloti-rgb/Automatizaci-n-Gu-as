@@ -20,8 +20,10 @@ import org.springframework.web.client.RestClient;
 import javax.net.ssl.*;
 import java.security.KeyManagementException;
 import java.security.NoSuchAlgorithmException;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 /**
  * Maneja la sesión (cookie) contra SAP Service Layer: login, renovación automática al
@@ -110,16 +112,40 @@ public class SapSessionManager {
                             && res.getStatusCode() != HttpStatus.NO_CONTENT) {
                         throw new RuntimeException("Fallo en el login de SAP: " + res.getStatusCode());
                     }
-                    String cookie = res.getHeaders().getFirst(HttpHeaders.SET_COOKIE);
-                    if (cookie == null) {
+                    List<String> cookies = res.getHeaders().get(HttpHeaders.SET_COOKIE);
+                    if (cookies == null || cookies.isEmpty()) {
                         throw new RuntimeException("No hay encabezado Set-Cookie en la respuesta del login de SAP");
                     }
-                    return cookie;
+                    return armarCookie(cookies);
                 });
 
         sessionCookie = response;
         log.info("SAP login successful, session acquired");
         return sessionCookie;
+    }
+
+    /**
+     * Junta <b>todas</b> las cookies del login en un solo encabezado {@code Cookie}.
+     *
+     * <p>El Service Layer devuelve dos: {@code B1SESSION}, que identifica la sesión, y
+     * {@code ROUTEID}, que identifica el nodo del clúster que la atiende. Quedarse solo con
+     * la primera —lo que hacía este método antes, con {@code getFirst()}— parece funcionar,
+     * porque las lecturas contestan igual desde cualquier nodo. Las <b>escrituras no</b>:
+     * la transacción vive en el nodo que abrió la sesión, y sin {@code ROUTEID} el PATCH
+     * aterriza en otro y muere con "Could not commit transaction: Error -1".
+     *
+     * <p>Costó encontrarlo porque SAP no dice que falte la cookie: informa un error de
+     * transacción, que parece un problema de datos. Dashboard nunca lo vio porque solo lee.
+     *
+     * <p>De cada {@code Set-Cookie} se toma únicamente el {@code nombre=valor} inicial: los
+     * atributos ({@code HttpOnly}, {@code Secure}, {@code SameSite}) son instrucciones para
+     * un navegador y no van en la petición.
+     */
+    static String armarCookie(List<String> setCookies) {
+        return setCookies.stream()
+                .map(c -> c.split(";", 2)[0].trim())
+                .filter(c -> !c.isEmpty())
+                .collect(Collectors.joining("; "));
     }
 
     public String currentCookieOrLogin() {
