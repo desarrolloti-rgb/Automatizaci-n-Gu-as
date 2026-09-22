@@ -42,14 +42,17 @@ public class SincronizacionSapService {
     private final GuiaRepository guiaRepository;
     private final RepartidorRepository repartidorRepository;
     private final String urlPublica;
+    private final boolean udfDisponible;
 
     public SincronizacionSapService(SapClient sapClient, GuiaRepository guiaRepository,
                                     RepartidorRepository repartidorRepository,
-                                    @Value("${guias.url-publica:}") String urlPublica) {
+                                    @Value("${guias.url-publica:}") String urlPublica,
+                                    @Value("${guias.sap.udf-estado-logistico:false}") boolean udfDisponible) {
         this.sapClient = sapClient;
         this.guiaRepository = guiaRepository;
         this.repartidorRepository = repartidorRepository;
         this.urlPublica = urlPublica == null ? "" : urlPublica.trim().replaceAll("/+$", "");
+        this.udfDisponible = udfDisponible;
     }
 
     /**
@@ -61,6 +64,12 @@ public class SincronizacionSapService {
      */
     @Transactional
     public void empujar(Guia guia) {
+        // Sin los UDF creados en SAP, el PATCH no falla en silencio: responde 400
+        // "Property 'U_EstadoLog' of 'Document' is invalid". Mientras no existan, la app
+        // funciona igual contra Postgres y no ensucia el log con un error por cada entrega.
+        if (!udfDisponible) {
+            return;
+        }
         try {
             sapClient.actualizarEstadoLogistico(guia.getDocEntry(), cuerpoPara(guia));
             guia.setSincronizada(true);
@@ -84,6 +93,9 @@ public class SincronizacionSapService {
      */
     @Scheduled(fixedDelayString = "${guias.sync.reintento-ms:120000}", initialDelayString = "60000")
     public void reintentarPendientes() {
+        if (!udfDisponible) {
+            return;
+        }
         List<Guia> pendientes = guiaRepository.findBySincronizadaFalse();
         if (pendientes.isEmpty()) {
             return;

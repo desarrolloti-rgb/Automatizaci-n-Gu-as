@@ -29,12 +29,15 @@ public class GuiaSyncService {
     private final SapClient sapClient;
     private final GuiaService guiaService;
     private final String filtroExtra;
+    private final boolean udfEstadoLogistico;
 
     public GuiaSyncService(SapClient sapClient, GuiaService guiaService,
-                            @Value("${guias.sync.filtro-extra:}") String filtroExtra) {
+                            @Value("${guias.sync.filtro-extra:}") String filtroExtra,
+                            @Value("${guias.sap.udf-estado-logistico:false}") boolean udfEstadoLogistico) {
         this.sapClient = sapClient;
         this.guiaService = guiaService;
         this.filtroExtra = filtroExtra;
+        this.udfEstadoLogistico = udfEstadoLogistico;
     }
 
     /** Cuántas guías se sincronizaron y cuántas filas de SAP se descartaron por venir incompletas. */
@@ -42,7 +45,7 @@ public class GuiaSyncService {
     }
 
     public Resultado sincronizarDesde(LocalDate desde) {
-        JsonNode respuesta = sapClient.fetchGuiasDeDespacho(desde, filtroExtra);
+        JsonNode respuesta = sapClient.fetchGuiasDeDespacho(desde, filtroExtra, udfEstadoLogistico);
 
         JsonNode value = respuesta == null ? null : respuesta.get("value");
         if (value == null || !value.isArray()) {

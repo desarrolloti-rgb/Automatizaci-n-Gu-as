@@ -45,7 +45,7 @@ class SincronizacionSapServiceTest {
     @BeforeEach
     void setUp() {
         service = new SincronizacionSapService(sapClient, guiaRepository, repartidorRepository,
-                "https://apps.calimport.cl/gd");
+                "https://apps.calimport.cl/gd", true);
     }
 
     private Guia guiaEntregada() {
@@ -140,5 +140,24 @@ class SincronizacionSapServiceTest {
         service.reintentarPendientes();
 
         verify(sapClient, never()).actualizarEstadoLogistico(anyInt(), any());
+    }
+
+    // --- mientras los UDF no existan en SAP ---
+
+    @Test
+    void sinLosUdfCreadosNoSeLlamaASapYLaAppSigueFuncionando() {
+        SincronizacionSapService sinUdf = new SincronizacionSapService(
+                sapClient, guiaRepository, repartidorRepository, "https://apps.calimport.cl/gd", false);
+        Guia guia = guiaEntregada();
+
+        sinUdf.empujar(guia);
+        sinUdf.reintentarPendientes();
+
+        // Pedirle a SAP un campo que no existe no devuelve vacío: responde 400 y tumba la
+        // operación. Verificado contra el Service Layer real el 22-09-2026.
+        verify(sapClient, never()).actualizarEstadoLogistico(anyInt(), any());
+        verify(guiaRepository, never()).findBySincronizadaFalse();
+        // La entrega ya quedó guardada en Postgres por GuiaService: no se toca.
+        assertFalse(guia.isSincronizada());
     }
 }

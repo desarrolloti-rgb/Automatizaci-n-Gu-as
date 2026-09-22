@@ -30,18 +30,19 @@ public class SapClient {
      *     y no de la request: todavía no está confirmado cuál es el criterio correcto en
      *     esta instalación, así que se deja ajustable sin recompilar.
      */
-    public JsonNode fetchGuiasDeDespacho(LocalDate desde, String filtroExtra) {
+    public JsonNode fetchGuiasDeDespacho(LocalDate desde, String filtroExtra, boolean conEstadoLogistico) {
         // Se arma de una sola vez: la lambda de abajo solo puede capturar variables que no
         // se reasignan ("effectively final"), asi que un filter += aca no compila.
         //
-        // Ademas de la fecha se piden dos condiciones del ciclo de ultima milla:
-        //  - U_EstadoLog eq 'P': solo las que nadie tomo todavia. Las que ya estan en T, E
-        //    o R salieron de esta app y ya viven en Postgres; volver a importarlas no
-        //    aporta y arriesga pisar lo que el repartidor hizo en terreno.
-        //  - DocumentStatus eq 'bost_Open': la guia sigue abierta contablemente. Una
-        //    cerrada o anulada en SAP no se reparte.
-        String porFecha = "DocDate ge '" + desde + "'"
-                + " and U_EstadoLog eq 'P' and DocumentStatus eq 'bost_Open'";
+        // DocumentStatus eq 'bost_Open' va siempre: la guia tiene que seguir abierta
+        // contablemente, y una cerrada o anulada en SAP no se reparte.
+        //
+        // U_EstadoLog eq 'P' (solo las que nadie tomo todavia) va unicamente si el UDF
+        // existe en esta instalacion. Pedirlo cuando no existe no devuelve vacio: SAP
+        // responde 400 "Property 'U_EstadoLog' of 'Document' is invalid" y la
+        // sincronizacion completa se cae. Comprobado contra el Service Layer real.
+        String base = "DocDate ge '" + desde + "' and DocumentStatus eq 'bost_Open'";
+        String porFecha = conEstadoLogistico ? base + " and U_EstadoLog eq 'P'" : base;
         String filter = (filtroExtra == null || filtroExtra.isBlank())
                 ? porFecha
                 : porFecha + " and (" + filtroExtra + ")";
