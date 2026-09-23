@@ -47,7 +47,7 @@ class RepartidorControllerTest {
     @Test
     void unRepartidorNoListaALosDemasRepartidores() throws Exception {
         String repartidor = "Bearer " + jwtTokenProvider.generateToken("juan@calimport.cl", 7, "Juan Perez",
-                Rol.REPARTIDOR);
+                Rol.Despachador);
 
         mockMvc.perform(get("/api/repartidores").header("Authorization", repartidor))
                 .andExpect(status().isForbidden());

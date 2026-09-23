@@ -36,7 +36,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 Claims claims = jwtTokenProvider.parseToken(token);
                 String email = claims.getSubject();
                 // hasRole('JEFE_BODEGA') busca la authority ROLE_JEFE_BODEGA. Un claim ausente
-                // o desconocido queda como REPARTIDOR, nunca como "ROLE_null".
+                // o desconocido queda como Despachador, nunca como "ROLE_null".
                 Rol rol = Rol.desdeClaim(claims.get("role"));
                 List<SimpleGrantedAuthority> authorities = List.of(new SimpleGrantedAuthority("ROLE_" + rol.name()));
 

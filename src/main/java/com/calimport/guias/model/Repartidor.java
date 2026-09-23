@@ -28,10 +28,10 @@ public class Repartidor {
     @Column(nullable = false)
     private boolean activo;
 
-    /** Se refresca en cada login. Solo los REPARTIDOR reciben guías. */
+    /** Se refresca en cada login. Solo los Despachador reciben guías. */
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
-    private Rol rol = Rol.REPARTIDOR;
+    private Rol rol = Rol.Despachador;
 
     // --- getters y setters ---
 

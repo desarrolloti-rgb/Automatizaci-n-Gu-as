@@ -128,7 +128,7 @@ async function mostrar() {
   $("#salir").hidden = !token;
   if (!token) return;
   yo = datosDelToken(token);
-  $("#saludo").textContent = "Sesión de " + yo.nombre + " (id " + yo.employeeId + ", " + (yo.role || "REPARTIDOR") + ")";
+  $("#saludo").textContent = "Sesión de " + yo.nombre + " (id " + yo.employeeId + ", " + (yo.role || "Despachador") + ")";
   // Solo bodega asigna: al repartidor el backend le niega la lista (403).
   repartidores = esJefe() ? await api("/api/repartidores?activos=true") : [];
   await cargar();

@@ -23,8 +23,8 @@ public class LocalAuthConfig {
         private String nombre;
         private String email;
         private String password;
-        /** Si no se declara, REPARTIDOR: así los usuarios que ya estaban no cambian. */
-        private Rol rol = Rol.REPARTIDOR;
+        /** Si no se declara, Despachador: así los usuarios que ya estaban no cambian. */
+        private Rol rol = Rol.Despachador;
 
         public int getEmployeeId() { return employeeId; }
         public void setEmployeeId(int employeeId) { this.employeeId = employeeId; }

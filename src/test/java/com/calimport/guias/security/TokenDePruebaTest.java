@@ -43,7 +43,7 @@ class TokenDePruebaTest {
         }
 
         String token = new JwtTokenProvider(secret, 480)
-                .generateToken("prueba@calimport.cl", 1, "Repartidor de Prueba", Rol.REPARTIDOR);
+                .generateToken("prueba@calimport.cl", 1, "Repartidor de Prueba", Rol.Despachador);
 
         System.out.println();
         System.out.println("=== TOKEN DE PRUEBA (valido 8 horas) ===");

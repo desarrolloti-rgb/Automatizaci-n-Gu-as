@@ -10,13 +10,9 @@ import com.calimport.guias.service.RepartidorService;
 import com.calimport.guias.utils.ApiException;
 import jakarta.validation.Valid;
 import tools.jackson.databind.JsonNode;
-import java.util.Arrays;
 import java.util.Locale;
-import java.util.Set;
-import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -41,25 +37,13 @@ public class AuthController {
     private final RepartidorService repartidorService;
     private final PasswordEncoder passwordEncoder;
     private final JwtTokenProvider jwtTokenProvider;
-    private final Set<String> emailsJefesBodega;
 
-    /**
-     * @param jefesBodega emails separados por coma que entran como JEFE_BODEGA. Es
-     *     <b>provisorio</b>: el rol debería salir de un campo de EmployeesInfo, pero todavía
-     *     no está confirmado cuál es en esta instalación y no se inventa. Mientras tanto,
-     *     sin esta lista nadie podría sincronizar ni asignar guías con login SAP.
-     */
     public AuthController(SapClient sapClient, RepartidorService repartidorService,
-                           PasswordEncoder passwordEncoder, JwtTokenProvider jwtTokenProvider,
-                           @Value("${auth.jefes-bodega:}") String jefesBodega) {
+                           PasswordEncoder passwordEncoder, JwtTokenProvider jwtTokenProvider) {
         this.sapClient = sapClient;
         this.repartidorService = repartidorService;
         this.passwordEncoder = passwordEncoder;
         this.jwtTokenProvider = jwtTokenProvider;
-        this.emailsJefesBodega = Arrays.stream(jefesBodega.split(","))
-                .map(email -> email.trim().toLowerCase(Locale.ROOT))
-                .filter(email -> !email.isEmpty())
-                .collect(Collectors.toUnmodifiableSet());
     }
 
     @PostMapping("/login")
@@ -94,12 +78,25 @@ public class AuthController {
         String email = employee.get("eMail").asText();
         String nombre = nombreCompleto(employee);
 
-        Rol rol = emailsJefesBodega.contains(email.trim().toLowerCase(Locale.ROOT)) ? Rol.JEFE_BODEGA : Rol.REPARTIDOR;
+        Rol rol = rolDeJobTitle(employee);
 
         repartidorService.upsertDesdeSap(employeeId, nombre, email, true, rol);
 
         String token = jwtTokenProvider.generateToken(email, employeeId, nombre, rol);
         return new LoginResponse(token);
+    }
+
+    /**
+     * El cargo de SAP decide el rol: si {@code JobTitle} empieza con "jefe" (sin importar
+     * mayúsculas ni espacios) es JEFE_BODEGA — así cubre los typos reales como
+     * "Jefe bogeda". Cualquier otro cargo, vacío o ausente queda como Despachador, el de
+     * menos permisos: alguien con un cargo inesperado no gana poder por accidente.
+     */
+    private static Rol rolDeJobTitle(JsonNode employee) {
+        String jobTitle = employee.has("JobTitle") ? employee.get("JobTitle").asText("") : "";
+        return jobTitle.trim().toLowerCase(Locale.ROOT).startsWith("jefe")
+                ? Rol.JEFE_BODEGA
+                : Rol.Despachador;
     }
 
     /**

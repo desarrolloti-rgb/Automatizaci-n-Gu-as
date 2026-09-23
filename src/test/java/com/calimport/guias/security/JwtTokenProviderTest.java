@@ -24,11 +24,11 @@ class JwtTokenProviderTest {
     void elTokenLlevaLosDatosDelRepartidorQueNecesitaElFrontend() {
         JwtTokenProvider provider = provider(SECRET, 60);
 
-        String token = provider.generateToken("juan@calimport.cl", 7, "Juan Perez", Rol.REPARTIDOR);
+        String token = provider.generateToken("juan@calimport.cl", 7, "Juan Perez", Rol.Despachador);
         Claims claims = provider.parseToken(token);
 
         assertEquals("juan@calimport.cl", claims.getSubject());
-        assertEquals("REPARTIDOR", claims.get("role", String.class));
+        assertEquals("Despachador", claims.get("role", String.class));
         assertEquals(7, claims.get("employeeId", Integer.class));
         assertEquals("Juan Perez", claims.get("nombre", String.class));
     }
@@ -45,9 +45,9 @@ class JwtTokenProviderTest {
 
     @Test
     void unRolAusenteODesconocidoSeLeeComoRepartidor() {
-        assertEquals(Rol.REPARTIDOR, Rol.desdeClaim(null));
-        assertEquals(Rol.REPARTIDOR, Rol.desdeClaim("ADMIN"));
-        assertEquals(Rol.REPARTIDOR, Rol.desdeClaim("jefe_bodega"));
+        assertEquals(Rol.Despachador, Rol.desdeClaim(null));
+        assertEquals(Rol.Despachador, Rol.desdeClaim("ADMIN"));
+        assertEquals(Rol.Despachador, Rol.desdeClaim("jefe_bodega"));
         assertEquals(Rol.JEFE_BODEGA, Rol.desdeClaim("JEFE_BODEGA"));
     }
 
@@ -63,14 +63,14 @@ class JwtTokenProviderTest {
         // TTL negativo: el token nace ya expirado.
         JwtTokenProvider provider = provider(SECRET, -1);
 
-        String token = provider.generateToken("juan@calimport.cl", 7, "Juan Perez", Rol.REPARTIDOR);
+        String token = provider.generateToken("juan@calimport.cl", 7, "Juan Perez", Rol.Despachador);
 
         assertFalse(provider.validateToken(token));
     }
 
     @Test
     void unTokenFirmadoConOtroSecretNoValida() {
-        String tokenAjeno = provider(OTRO_SECRET, 60).generateToken("juan@calimport.cl", 7, "Juan Perez", Rol.REPARTIDOR);
+        String tokenAjeno = provider(OTRO_SECRET, 60).generateToken("juan@calimport.cl", 7, "Juan Perez", Rol.Despachador);
 
         assertFalse(provider(SECRET, 60).validateToken(tokenAjeno));
     }
@@ -78,7 +78,7 @@ class JwtTokenProviderTest {
     @Test
     void unTokenAlteradoNoValida() {
         JwtTokenProvider provider = provider(SECRET, 60);
-        String token = provider.generateToken("juan@calimport.cl", 7, "Juan Perez", Rol.REPARTIDOR);
+        String token = provider.generateToken("juan@calimport.cl", 7, "Juan Perez", Rol.Despachador);
 
         // Se altera el payload sin volver a firmar: la firma deja de cuadrar.
         String[] partes = token.split("\\.");
@@ -91,7 +91,7 @@ class JwtTokenProviderTest {
     void unTokenRecienEmitidoValida() {
         JwtTokenProvider provider = provider(SECRET, 60);
 
-        assertTrue(provider.validateToken(provider.generateToken("juan@calimport.cl", 7, "Juan Perez", Rol.REPARTIDOR)));
+        assertTrue(provider.validateToken(provider.generateToken("juan@calimport.cl", 7, "Juan Perez", Rol.Despachador)));
     }
 
     @Test

@@ -72,7 +72,7 @@ class RepartidorServiceTest {
     void listarActivosTraeSoloRepartidoresActivosYNoAlJefeDeBodega() {
         // El jefe de bodega también está en la tabla, pero no recibe guías.
         List<Repartidor> activos = List.of(repartidor(7, "Juan Perez", "juan@calimport.cl", true));
-        when(repartidorRepository.findByActivoTrueAndRol(Rol.REPARTIDOR)).thenReturn(activos);
+        when(repartidorRepository.findByActivoTrueAndRol(Rol.Despachador)).thenReturn(activos);
 
         assertEquals(activos, service.listarActivos());
     }
@@ -82,13 +82,13 @@ class RepartidorServiceTest {
         when(repartidorRepository.findById(7)).thenReturn(Optional.empty());
         devuelveLoQueGuarda();
 
-        Repartidor resultado = service.upsertDesdeSap(7, "Juan Perez", "juan@calimport.cl", true, Rol.REPARTIDOR);
+        Repartidor resultado = service.upsertDesdeSap(7, "Juan Perez", "juan@calimport.cl", true, Rol.Despachador           );
 
         assertEquals(7, resultado.getEmployeeId());
         assertEquals("Juan Perez", resultado.getNombre());
         assertEquals("juan@calimport.cl", resultado.getEmail());
         assertTrue(resultado.isActivo());
-        assertEquals(Rol.REPARTIDOR, resultado.getRol());
+        assertEquals(Rol.Despachador, resultado.getRol());
     }
 
     @Test
@@ -108,7 +108,7 @@ class RepartidorServiceTest {
         when(repartidorRepository.findById(7)).thenReturn(Optional.of(existente));
         devuelveLoQueGuarda();
 
-        Repartidor resultado = service.upsertDesdeSap(7, "Nombre Nuevo", "nuevo@calimport.cl", true, Rol.REPARTIDOR);
+        Repartidor resultado = service.upsertDesdeSap(7, "Nombre Nuevo", "nuevo@calimport.cl", true, Rol.Despachador            );
 
         // Reusar la instancia encontrada es lo que hace que JPA emita UPDATE y no INSERT.
         ArgumentCaptor<Repartidor> guardado = ArgumentCaptor.forClass(Repartidor.class);
@@ -126,7 +126,7 @@ class RepartidorServiceTest {
         when(repartidorRepository.findById(7)).thenReturn(Optional.of(existente));
         devuelveLoQueGuarda();
 
-        Repartidor resultado = service.upsertDesdeSap(7, "Juan Perez", "juan@calimport.cl", false, Rol.REPARTIDOR);
+        Repartidor resultado = service.upsertDesdeSap(7, "Juan Perez", "juan@calimport.cl", false, Rol.Despachador);
 
         assertFalse(resultado.isActivo());
     }

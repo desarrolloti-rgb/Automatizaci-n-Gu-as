@@ -50,7 +50,7 @@ public class RutaController {
 
     /** La ruta del repartidor que inició sesión, sin que la app tenga que conocer su id. */
     @GetMapping("/mia")
-    @PreAuthorize("hasRole('REPARTIDOR')")
+    @PreAuthorize("hasRole('Despachador')")
     public RutaResponse mia(
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate fecha,
             Authentication authentication) {

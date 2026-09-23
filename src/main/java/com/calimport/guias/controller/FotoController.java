@@ -44,7 +44,7 @@ public class FotoController {
 
     @PostMapping(value = "/api/guias/{id}/foto", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     @org.springframework.web.bind.annotation.ResponseStatus(HttpStatus.CREATED)
-    @PreAuthorize("hasRole('REPARTIDOR')")
+    @PreAuthorize("hasRole('Despachador')")
     public FotoGuardada subir(@PathVariable Long id, @RequestParam("archivo") MultipartFile archivo,
                               Authentication authentication) {
         Guia guia = guiaService.obtenerPropia(id, UsuarioActual.de(authentication).employeeId());

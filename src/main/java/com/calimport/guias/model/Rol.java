@@ -7,13 +7,13 @@ package com.calimport.guias.model;
 public enum Rol {
 
     /** Ve y resuelve solo las guías que tiene asignadas. */
-    REPARTIDOR,
+    Despachador,
 
     /** Sincroniza desde SAP, asigna guías, define horarios y arma rutas. Ve todas las guías. */
     JEFE_BODEGA;
 
     /**
-     * Un claim ausente o desconocido se lee como {@link #REPARTIDOR}, el rol con menos
+     * Un claim ausente o desconocido se lee como {@link #Despachador}, el rol con menos
      * permisos: un token viejo o manipulado nunca termina con más acceso del que tenía.
      */
     public static Rol desdeClaim(Object valor) {
@@ -24,6 +24,6 @@ public enum Rol {
                 }
             }
         }
-        return REPARTIDOR;
+        return Despachador;
     }
 }

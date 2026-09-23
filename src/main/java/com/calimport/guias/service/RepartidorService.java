@@ -25,10 +25,10 @@ public class RepartidorService {
         return repartidorRepository.findAll();
     }
 
-    /** Los que pueden recibir guías: activos y con rol REPARTIDOR (el jefe de bodega no reparte). */
+    /** Los que pueden recibir guías: activos y con rol Despachador (el jefe de bodega no reparte). */
     @Transactional(readOnly = true)
     public List<Repartidor> listarActivos() {
-        return repartidorRepository.findByActivoTrueAndRol(Rol.REPARTIDOR);
+        return repartidorRepository.findByActivoTrueAndRol(Rol.Despachador);
     }
 
     @Transactional(readOnly = true)
