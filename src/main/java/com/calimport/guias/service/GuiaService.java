@@ -132,6 +132,11 @@ public class GuiaService {
         if (limpia.isEmpty()) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "La dirección no puede quedar vacía");
         }
+        // El @Size del DTO ya corta en el borde; esto cubre los caminos que no pasan por el
+        // controller. Sin el tope, pasarse del largo de la columna sale como 500.
+        if (limpia.length() > 255) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "La dirección no puede superar los 255 caracteres");
+        }
         Guia guia = obtenerPorId(id);
         if (guia.getEstado() != EstadoGuia.PENDIENTE) {
             throw new ApiException(HttpStatus.CONFLICT, "Solo se puede cambiar la dirección de una guía PENDIENTE");

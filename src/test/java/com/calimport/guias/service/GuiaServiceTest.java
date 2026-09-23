@@ -339,6 +339,21 @@ class GuiaServiceTest {
         assertFalse(guia.isUbicacionAproximada());
     }
 
+    @Test
+    void definirDireccionRechazaUnaDemasiadoLargaAntesDeLlegarAPostgres() {
+        // La columna es VARCHAR(255). Sin el tope, el error aparece recien al guardar y
+        // sale como 500; el @Size del DTO lo corta en el borde, pero el servicio tambien
+        // se defiende porque no todos los caminos pasan por el controller.
+        //
+        // No hace falta stub del repositorio: la validacion corta antes de buscar la guia,
+        // que es justamente lo que se quiere.
+        ApiException e = assertThrows(ApiException.class,
+                () -> service.definirDireccion(1L, "x".repeat(256)));
+
+        assertEquals(HttpStatus.BAD_REQUEST, e.getStatus());
+        verify(guiaRepository, never()).save(any());
+    }
+
     @ParameterizedTest
     @NullSource
     @ValueSource(strings = {"", "   "})

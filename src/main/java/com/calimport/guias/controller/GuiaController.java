@@ -128,7 +128,7 @@ public class GuiaController {
      */
     @PatchMapping("/{id}/direccion")
     @PreAuthorize("hasRole('JEFE_BODEGA')")
-    public Guia definirDireccion(@PathVariable Long id, @RequestBody DefinirDireccionRequest request) {
+    public Guia definirDireccion(@PathVariable Long id, @RequestBody @Valid DefinirDireccionRequest request) {
         return guiaService.definirDireccion(id, request.direccion());
     }
 
