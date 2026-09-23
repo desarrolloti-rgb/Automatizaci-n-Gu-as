@@ -199,6 +199,37 @@ class RutaServiceTest {
     }
 
     @Test
+    void elHorarioSaleDelPieDelDocumentoYNoDelComentario() {
+        // El pie es de este despacho y llega limpio: solo la frase del "HORARIO:". El
+        // Comments queda para las guias cuyo pie no dice nada de horario.
+        Guia guia = guiaUbicada(1);
+        guia.setHorarioFooter("LUNES A VIERNES 08:30 A 17:00 HORAS.");
+        guia.setComentario("Dejar en bodega");
+        when(interpreteComentarios.interpretar("LUNES A VIERNES 08:30 A 17:00 HORAS."))
+                .thenReturn(new Interpretacion(LocalTime.of(8, 30), LocalTime.of(17, 0), null));
+        optimizadorDevuelve(1);
+
+        RutaResponse ruta = service.generar(request(1L));
+
+        assertEquals(LocalTime.of(8, 30), ruta.paradas().get(0).ventanaDesde());
+        verify(interpreteComentarios, never()).interpretar("Dejar en bodega");
+    }
+
+    @Test
+    void elPieCompletoLeLlegaAlRepartidorEnLaParada() {
+        // Ahi vienen el contacto y el telefono: en la calle, con el porton cerrado, es lo
+        // unico que le sirve.
+        Guia guia = guiaUbicada(1);
+        guia.setFooter("DESPACHAR A: Av. Salvador 1150 CONTACTO: Patricia Rojas CEL: +56 9 8370 8082");
+        optimizadorDevuelve(1);
+
+        RutaResponse ruta = service.generar(request(1L));
+
+        assertEquals("DESPACHAR A: Av. Salvador 1150 CONTACTO: Patricia Rojas CEL: +56 9 8370 8082",
+                ruta.paradas().get(0).footer());
+    }
+
+    @Test
     void noVuelveAInterpretarUnComentarioYaInterpretado() {
         Guia guia = guiaUbicada(1);
         guia.setComentario("solo mañanas");

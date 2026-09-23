@@ -42,6 +42,9 @@ class InterpreteReglasTest {
             "hasta las 5 pm                                      | -     | 17:00",
             "no reciben antes de las 10                          | 10:00 | -",
             "por la mañana, desde las 10                         | 10:00 | 13:00",
+            // El comentario armado con el pie del documento (ClosingRemarks): el horario va
+            // adelante justamente para que el teléfono de más atrás no se lea como una hora.
+            "HORARIO: LUNES A VIERNES 08:30 A 17:00 HORAS. · CONTACTO: JUAN ELIAS ESCUDERO · TEL: +56 9 8370 8082 | 08:30 | 17:00",
     })
     void leeElHorario(String comentario, String desde, String hasta) {
         Interpretacion i = interprete.interpretar(comentario);
@@ -59,6 +62,9 @@ class InterpreteReglasTest {
             "Fono 2 2345 6789",
             "Factura a nombre de Comercial Dos",
             "no reciben de 13 a 14",
+            // Del pie de una guía real: es cuando la bodega está cerrada, no cuando recibe.
+            "HORARIO: colación 13 a 15Hrs",
+            "cerrado de 13 a 14:30",
             "'  '",
     })
     void sinHorarioNoInventaNada(String comentario) {

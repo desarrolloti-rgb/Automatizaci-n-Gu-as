@@ -19,8 +19,12 @@ public class SapClient {
     }
 
     /**
-     * Guías de despacho emitidas desde una fecha, con solo los cuatro campos que la app
+     * Guías de despacho emitidas en un rango de fechas, con solo los campos que la app
      * necesita.
+     *
+     * @param hasta última fecha incluida; {@code null} trae todo desde {@code desde} en
+     *     adelante. Acotar por arriba sirve para reimportar un día puntual sin arrastrar
+     *     todo lo emitido después.
      *
      * <p>El {@code $select} importa: sin él, SAP devuelve el documento completo con todas
      * sus líneas (cientos de campos por guía). Acotarlo baja la respuesta a una fracción.
@@ -30,7 +34,8 @@ public class SapClient {
      *     y no de la request: todavía no está confirmado cuál es el criterio correcto en
      *     esta instalación, así que se deja ajustable sin recompilar.
      */
-    public JsonNode fetchGuiasDeDespacho(LocalDate desde, String filtroExtra, boolean conEstadoLogistico) {
+    public JsonNode fetchGuiasDeDespacho(LocalDate desde, LocalDate hasta, String filtroExtra,
+                                         boolean conEstadoLogistico) {
         // Se arma de una sola vez: la lambda de abajo solo puede capturar variables que no
         // se reasignan ("effectively final"), asi que un filter += aca no compila.
         //
@@ -47,18 +52,25 @@ public class SapClient {
         // documentos anteriores a que se creara el campo nunca lo van a tener. Una guia que
         // esta app nunca toco esta pendiente, se llame null o 'P'. Sin esto la
         // sincronizacion trae cero guias, que es lo que paso al probarlo.
+        // "hasta" es opcional y va incluido: DocDate no lleva hora (SAP la guarda siempre a
+        // medianoche), asi que "le 2026-09-23" trae todas las guias de ese dia.
         String base = "DocDate ge '" + desde + "' and DocumentStatus eq 'bost_Open'";
+        String porRango = hasta == null ? base : base + " and DocDate le '" + hasta + "'";
         String porFecha = conEstadoLogistico
-                ? base + " and (U_EstadoLog eq 'P' or U_EstadoLog eq null)"
-                : base;
+                ? porRango + " and (U_EstadoLog eq 'P' or U_EstadoLog eq null)"
+                : porRango;
         String filter = (filtroExtra == null || filtroExtra.isBlank())
                 ? porFecha
                 : porFecha + " and (" + filtroExtra + ")";
 
         return sessionManager.executeWithSession(cookie ->
                 sessionManager.getRestClient().get()
+                        // ClosingRemarks es el pie del documento (T0.[Footer] en una consulta):
+                        // ahi viene escrita la direccion de despacho real y el horario de
+                        // recepcion. Es campo estandar de SAP, no un UDF, asi que pedirlo no
+                        // corre el riesgo del 400 que tienen los U_*.
                         .uri("/DeliveryNotes?$filter={filter}"
-                           + "&$select=DocEntry,FolioNumber,CardName,Address,Address2,Comments"
+                           + "&$select=DocEntry,FolioNumber,CardName,Address,Address2,Comments,ClosingRemarks"
                            + "&$orderby=DocEntry", filter)
                         .header("Cookie", cookie)
                         .retrieve()

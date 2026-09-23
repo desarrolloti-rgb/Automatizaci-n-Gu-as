@@ -37,6 +37,12 @@ public record RutaResponse(
             boolean fueraDeHorario,
             String nota,
             String comentario,
+            /**
+             * El pie del documento, entero. Es donde vienen el contacto y el teléfono de
+             * quien recibe: en la calle, con el portón cerrado, es lo único que le sirve al
+             * repartidor. Va crudo y no resumido — lo escribió alguien para que lo lean.
+             */
+            String footer,
             String wazeUrl,
             String googleMapsUrl) {
     }

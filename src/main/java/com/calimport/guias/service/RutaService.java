@@ -83,7 +83,7 @@ public class RutaService {
         if (!repartidor.isActivo()) {
             throw new ApiException(HttpStatus.CONFLICT, "El repartidor " + repartidor.getNombre() + " no está activo");
         }
-        if (repartidor.getRol() != Rol.REPARTIDOR) {
+        if (repartidor.getRol() != Rol.Despachador) {
             throw new ApiException(HttpStatus.CONFLICT, repartidor.getNombre() + " no es repartidor");
         }
 
@@ -165,25 +165,38 @@ public class RutaService {
 
     /**
      * Si la interpretación falla, la ruta se genera igual sin ese horario: es preferible una ruta que
-     * ignore un comentario a no tener ruta. El comentario viaja completo en la respuesta,
-     * así que el repartidor lo ve de todas formas, y se reintenta en la próxima generación.
+     * ignore un comentario a no tener ruta. El comentario y el pie viajan completos en la
+     * respuesta, así que el repartidor los ve de todas formas, y se reintenta en la próxima
+     * generación.
      */
     private List<Guia> interpretarComentarios(List<Guia> guias) {
         List<Guia> resultado = new ArrayList<>();
         for (Guia guia : guias) {
-            if (guia.getOrigenHorario() != null || guia.getComentario() == null) {
+            String texto = textoConElHorario(guia);
+            if (guia.getOrigenHorario() != null || texto == null) {
                 resultado.add(guia);
                 continue;
             }
             try {
-                Interpretacion i = interpreteComentarios.interpretar(guia.getComentario());
+                Interpretacion i = interpreteComentarios.interpretar(texto);
                 resultado.add(guiaService.guardarHorarioInterpretado(guia.getId(), i.desde(), i.hasta(), i.nota()));
             } catch (RuntimeException e) {
-                log.warn("No se pudo interpretar el comentario de la guia {}: {}", guia.getId(), e.getMessage());
+                log.warn("No se pudo interpretar el horario de la guia {}: {}", guia.getId(), e.getMessage());
                 resultado.add(guia);
             }
         }
         return resultado;
+    }
+
+    /**
+     * De dónde sacar la ventana de entrega. <b>El pie manda</b>: cuando el documento trae un
+     * "HORARIO:", ése es el horario de este despacho, y además llega limpio — solo la frase
+     * del horario, sin teléfonos ni direcciones que puedan leerse como una hora. El
+     * {@code Comments} queda para las guías cuyo pie no dice nada de horario.
+     */
+    private static String textoConElHorario(Guia guia) {
+        String delPie = guia.getHorarioFooter();
+        return (delPie != null && !delPie.isBlank()) ? delPie : guia.getComentario();
     }
 
     private RutaResponse guardar(GenerarRutaRequest request, List<Guia> guias, List<Visita> visitas) {
@@ -227,7 +240,7 @@ public class RutaService {
                     guia.getDireccion(), guia.getLatitud(), guia.getLongitud(), guia.isUbicacionAproximada(),
                     llegada.withSecond(0).withNano(0), guia.getVentanaDesde(), guia.getVentanaHasta(),
                     guia.getOrigenHorario(), fueraDeHorario, guia.getNotaEntrega(), guia.getComentario(),
-                    LinksNavegacion.waze(punto), LinksNavegacion.googleMaps(punto)));
+                    guia.getFooter(), LinksNavegacion.waze(punto), LinksNavegacion.googleMaps(punto)));
             puntos.add(punto);
         }
 

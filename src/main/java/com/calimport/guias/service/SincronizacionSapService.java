@@ -1,5 +1,6 @@
 package com.calimport.guias.service;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 
@@ -73,6 +74,13 @@ public class SincronizacionSapService {
         try {
             sapClient.actualizarEstadoLogistico(guia.getDocEntry(), cuerpoPara(guia));
             guia.setSincronizada(true);
+            // La foto recién existe para el resto de la empresa cuando llega a SAP: ése es
+            // el momento en que la guía queda despachada de cara al resto de la empresa, y
+            // no cuando el repartidor cerró la guía en su celular sin señal. Se escribe una
+            // sola vez: un reintento no cambia cuándo llegó.
+            if (guia.getUrlFoto() != null && guia.getFechaFotoEnSap() == null) {
+                guia.setFechaFotoEnSap(Instant.now());
+            }
             guiaRepository.save(guia);
             log.debug("Guia folio {} reflejada en SAP como {}", guia.getFolio(), EstadoLogistico.codigo(guia));
         } catch (RuntimeException e) {

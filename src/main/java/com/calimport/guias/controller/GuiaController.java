@@ -21,6 +21,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.calimport.guias.controller.dto.AsignarRepartidorRequest;
 import com.calimport.guias.controller.dto.CrearGuiaRequest;
+import com.calimport.guias.controller.dto.DefinirDireccionRequest;
 import com.calimport.guias.controller.dto.DefinirHorarioRequest;
 import com.calimport.guias.controller.dto.EntregaRequest;
 import com.calimport.guias.controller.dto.RechazoRequest;
@@ -63,10 +64,16 @@ public class GuiaController {
     @PostMapping("/sincronizar")
     @PreAuthorize("hasRole('JEFE_BODEGA')")
     public GuiaSyncService.Resultado sincronizar(
-            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate desde) {
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate desde,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate hasta) {
         LocalDate fecha = desde != null ? desde : LocalDate.now();
+        // Se valida acá y no en el servicio porque es un error de quien llama, no del
+        // negocio: un rango al revés no trae cero guías, trae una consulta sin sentido.
+        if (hasta != null && hasta.isBefore(fecha)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "La fecha 'hasta' no puede ser anterior a 'desde'");
+        }
         try {
-            return guiaSyncService.sincronizarDesde(fecha);
+            return guiaSyncService.sincronizar(fecha, hasta);
         } catch (SapUnauthorizedException e) {
             log.error("Sesion SAP invalida sincronizando guias: {}", e.getMessage());
             throw new ApiException(HttpStatus.BAD_GATEWAY, "Error de sesión con SAP");
@@ -115,14 +122,24 @@ public class GuiaController {
         return guiaService.definirHorario(id, request.ventanaDesde(), request.ventanaHasta(), request.nota());
     }
 
+    /**
+     * El bodeguero corrige la dirección de despacho, leyendo el pie del documento. Manda
+     * sobre SAP: ninguna sincronización la vuelve a pisar.
+     */
+    @PatchMapping("/{id}/direccion")
+    @PreAuthorize("hasRole('JEFE_BODEGA')")
+    public Guia definirDireccion(@PathVariable Long id, @RequestBody DefinirDireccionRequest request) {
+        return guiaService.definirDireccion(id, request.direccion());
+    }
+
     @PatchMapping("/{id}/recepcion")
-    @PreAuthorize("hasRole('REPARTIDOR')")
+    @PreAuthorize("hasRole('Despachador')")
     public Guia marcarRecibidaPorRepartidor(@PathVariable Long id, Authentication authentication) {
         return guiaService.marcarRecibidaPorRepartidor(id, UsuarioActual.de(authentication).employeeId());
     }
 
     @PostMapping("/{id}/entrega")
-    @PreAuthorize("hasRole('REPARTIDOR')")
+    @PreAuthorize("hasRole('Despachador')")
     public Guia entregar(@PathVariable Long id, @RequestBody EntregaRequest request, Authentication authentication) {
         return guiaService.entregar(id, UsuarioActual.de(authentication).employeeId(),
                 request.urlFoto(), request.hashFoto());
@@ -130,7 +147,7 @@ public class GuiaController {
 
     /** El motivo viaja en el cuerpo y es obligatorio: ver {@link RechazoRequest}. */
     @PostMapping("/{id}/rechazo")
-    @PreAuthorize("hasRole('REPARTIDOR')")
+    @PreAuthorize("hasRole('Despachador')")
     public Guia rechazar(@PathVariable Long id, @RequestBody @Valid RechazoRequest request,
                          Authentication authentication) {
         return guiaService.rechazar(id, UsuarioActual.de(authentication).employeeId(), request.motivo());

@@ -11,8 +11,10 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.calimport.guias.model.EstadoGuia;
 import com.calimport.guias.model.Guia;
+import com.calimport.guias.model.OrigenDireccion;
 import com.calimport.guias.model.OrigenHorario;
 import com.calimport.guias.repository.GuiaRepository;
+import com.calimport.guias.sap.GuiaSap;
 import com.calimport.guias.security.UsuarioActual;
 import com.calimport.guias.utils.ApiException;
 
@@ -64,35 +66,89 @@ public class GuiaService {
      *
      * <p>Lo que se calculó a partir de un dato de SAP sí se descarta cuando ese dato cambia:
      * si se corrige la dirección, las coordenadas viejas apuntarían a otro lugar; si cambia
-     * el comentario, el horario interpretado ya no corresponde. Un horario que definió el
-     * bodeguero, en cambio, se respeta.
+     * el comentario, el horario interpretado ya no corresponde. Un horario o una dirección
+     * que definió el bodeguero, en cambio, se respetan: son los únicos datos que alguien
+     * miró y confirmó, y volver a pisarlos con lo que dice SAP desharía esa corrección en
+     * la siguiente sincronización.
+     *
+     * <p>El pie del documento se refresca <b>siempre</b>, incluso cuando bodega corrigió la
+     * dirección: es lo que el documento dice hoy, y es justamente contra lo que bodega
+     * compara. Lo que no se toca es la decisión que tomó a partir de él.
      */
     @Transactional
-    public Guia sincronizarDesdeSap(int docEntry, Long folio, String cliente, String direccion, String comentario) {
-        Guia guia = guiaRepository.findByDocEntry(docEntry)
-                .orElseGet(() -> new Guia(docEntry, folio, cliente, direccion));
+    public Guia sincronizarDesdeSap(GuiaSap datos) {
+        Guia guia = guiaRepository.findByDocEntry(datos.docEntry())
+                .orElseGet(() -> new Guia(datos.docEntry(), datos.folio(), datos.cliente(), datos.direccion()));
 
         if (guia.getEstado() != EstadoGuia.PENDIENTE) {
             return guia;
         }
 
-        String comentarioNuevo = (comentario == null || comentario.isBlank()) ? null : comentario;
+        String comentarioNuevo = vacioANull(datos.comentario());
+        String horarioFooterNuevo = vacioANull(datos.horarioFooter());
+        boolean direccionDeBodega = guia.getOrigenDireccion() == OrigenDireccion.BODEGA;
 
-        if (!Objects.equals(guia.getDireccion(), direccion)) {
+        if (!direccionDeBodega && !Objects.equals(guia.getDireccion(), datos.direccion())) {
             guia.setLatitud(null);
             guia.setLongitud(null);
             guia.setUbicacionAproximada(false);
         }
-        if (!Objects.equals(guia.getComentario(), comentarioNuevo)
-                && guia.getOrigenHorario() == OrigenHorario.COMENTARIO) {
+        // El horario interpretado se descarta cuando cambia el texto del que salió, sea el
+        // pie o el comentario: si el documento dice otra cosa, la ventana vieja ya no vale.
+        if (guia.getOrigenHorario() == OrigenHorario.COMENTARIO
+                && (!Objects.equals(guia.getComentario(), comentarioNuevo)
+                    || !Objects.equals(guia.getHorarioFooter(), horarioFooterNuevo))) {
             limpiarHorario(guia);
         }
 
-        guia.setFolio(folio);
-        guia.setCliente(cliente);
-        guia.setDireccion(direccion);
+        guia.setFolio(datos.folio());
+        guia.setCliente(datos.cliente());
+        if (!direccionDeBodega) {
+            guia.setDireccion(datos.direccion());
+            guia.setOrigenDireccion(datos.origenDireccion());
+        }
         guia.setComentario(comentarioNuevo);
+        guia.setFooter(vacioANull(datos.footer()));
+        guia.setDireccionFooter(vacioANull(datos.direccionFooter()));
+        guia.setHorarioFooter(horarioFooterNuevo);
         return guiaRepository.save(guia);
+    }
+
+    /**
+     * El jefe de bodega corrige la dirección de despacho, leyendo el pie del documento.
+     *
+     * <p>Manda sobre las dos fuentes de SAP y ninguna sincronización la vuelve a pisar
+     * (queda en {@link OrigenDireccion#BODEGA}). Es la contrapartida de no confiar en la
+     * dirección de la ficha del cliente: si no se pudiera corregir, una dirección vieja no
+     * tendría arreglo salvo editar SAP.
+     *
+     * <p>No admite dejarla vacía, a diferencia del horario: una guía sin horario se ordena
+     * por cercanía y se entrega igual, pero una sin dirección no se puede ubicar ni rutear.
+     * El pie sigue guardado, así que para volver atrás se copia de ahí.
+     */
+    @Transactional
+    public Guia definirDireccion(Long id, String direccion) {
+        String limpia = direccion == null ? "" : direccion.trim();
+        if (limpia.isEmpty()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "La dirección no puede quedar vacía");
+        }
+        Guia guia = obtenerPorId(id);
+        if (guia.getEstado() != EstadoGuia.PENDIENTE) {
+            throw new ApiException(HttpStatus.CONFLICT, "Solo se puede cambiar la dirección de una guía PENDIENTE");
+        }
+        if (!Objects.equals(guia.getDireccion(), limpia)) {
+            // Las coordenadas eran de la dirección anterior: apuntarían a otro lugar.
+            guia.setLatitud(null);
+            guia.setLongitud(null);
+            guia.setUbicacionAproximada(false);
+        }
+        guia.setDireccion(limpia);
+        guia.setOrigenDireccion(OrigenDireccion.BODEGA);
+        return guiaRepository.save(guia);
+    }
+
+    private static String vacioANull(String texto) {
+        return (texto == null || texto.isBlank()) ? null : texto;
     }
 
     /**

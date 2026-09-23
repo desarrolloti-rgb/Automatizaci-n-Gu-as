@@ -1,5 +1,6 @@
 package com.calimport.guias.service;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -21,6 +22,8 @@ import com.calimport.guias.sap.SapClient;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -140,6 +143,58 @@ class SincronizacionSapServiceTest {
         service.reintentarPendientes();
 
         verify(sapClient, never()).actualizarEstadoLogistico(anyInt(), any());
+    }
+
+    // --- cuándo quedó despachada ---
+
+    @Test
+    void laGuiaQuedaDespachadaCuandoLaFotoLlegaASap() {
+        // No cuando el repartidor cerró la guía en el celular: hasta que la evidencia no
+        // está en SAP, para el resto de la empresa esa entrega no existe.
+        Guia guia = guiaEntregada();
+        hayRepartidor();
+
+        service.empujar(guia);
+
+        assertNotNull(guia.getFechaFotoEnSap());
+    }
+
+    @Test
+    void unReintentoNoCambiaCuandoLlegoLaFoto() {
+        Guia guia = guiaEntregada();
+        hayRepartidor();
+        service.empujar(guia);
+        Instant primera = guia.getFechaFotoEnSap();
+
+        guia.setSincronizada(false);
+        service.empujar(guia);
+
+        assertEquals(primera, guia.getFechaFotoEnSap());
+    }
+
+    @Test
+    void siSapNoContestaNoSeAnotaQueLaFotoLlego() {
+        Guia guia = guiaEntregada();
+        hayRepartidor();
+        doThrow(new RuntimeException("connection timeout"))
+                .when(sapClient).actualizarEstadoLogistico(anyInt(), any());
+
+        service.empujar(guia);
+
+        assertNull(guia.getFechaFotoEnSap());
+    }
+
+    @Test
+    void unRetiroSinFotoNoMarcaLaGuiaComoDespachada() {
+        // El paso P → T tambien empuja a SAP, pero ahi todavia no hay nada que entregar.
+        Guia guia = guiaEntregada();
+        guia.setEstado(EstadoGuia.PENDIENTE);
+        guia.setUrlFoto(null);
+        hayRepartidor();
+
+        service.empujar(guia);
+
+        assertNull(guia.getFechaFotoEnSap());
     }
 
     // --- mientras los UDF no existan en SAP ---

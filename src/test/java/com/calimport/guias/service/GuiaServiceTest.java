@@ -17,9 +17,11 @@ import org.springframework.http.HttpStatus;
 
 import com.calimport.guias.model.EstadoGuia;
 import com.calimport.guias.model.Guia;
+import com.calimport.guias.model.OrigenDireccion;
 import com.calimport.guias.model.OrigenHorario;
 import com.calimport.guias.model.Rol;
 import com.calimport.guias.repository.GuiaRepository;
+import com.calimport.guias.sap.GuiaSap;
 import com.calimport.guias.security.UsuarioActual;
 import com.calimport.guias.utils.ApiException;
 
@@ -77,6 +79,15 @@ class GuiaServiceTest {
         when(guiaRepository.save(any(Guia.class))).thenAnswer(inv -> inv.getArgument(0));
     }
 
+    /**
+     * Lo que la sincronización le pasa al servicio. La dirección llega marcada como
+     * LOGISTICA: es el caso de una guía cuyo pie no traía una dirección ubicable, que es lo
+     * que prueban casi todos estos tests. Los que miran el pie arman su propio GuiaSap.
+     */
+    private static GuiaSap deSap(long folio, String cliente, String direccion, String comentario) {
+        return new GuiaSap(DOC_ENTRY, folio, cliente, direccion, OrigenDireccion.LOGISTICA, comentario, "", "", "");
+    }
+
     // --- crear ---
 
     @Test
@@ -120,7 +131,7 @@ class GuiaServiceTest {
         when(guiaRepository.findByDocEntry(DOC_ENTRY)).thenReturn(Optional.empty());
         devuelveLoQueGuarda();
 
-        Guia guia = service.sincronizarDesdeSap(DOC_ENTRY, FOLIO, "Cliente X", "Av. Siempre Viva 742", null);
+        Guia guia = service.sincronizarDesdeSap(deSap( FOLIO, "Cliente X", "Av. Siempre Viva 742", null));
 
         assertEquals(DOC_ENTRY, guia.getDocEntry());
         assertEquals("Cliente X", guia.getCliente());
@@ -135,7 +146,7 @@ class GuiaServiceTest {
         when(guiaRepository.findByDocEntry(DOC_ENTRY)).thenReturn(Optional.of(yaImportada));
         devuelveLoQueGuarda();
 
-        Guia guia = service.sincronizarDesdeSap(DOC_ENTRY, 9999L, "Cliente Corregido", "Nueva Direccion 123", null);
+        Guia guia = service.sincronizarDesdeSap(deSap( 9999L, "Cliente Corregido", "Nueva Direccion 123", null));
 
         assertSame(yaImportada, guia);
         assertEquals(9999L, guia.getFolio());
@@ -151,7 +162,7 @@ class GuiaServiceTest {
         entregada.setUrlFoto("https://fotos/1.jpg");
         when(guiaRepository.findByDocEntry(DOC_ENTRY)).thenReturn(Optional.of(entregada));
 
-        Guia guia = service.sincronizarDesdeSap(DOC_ENTRY, 9999L, "Cliente Corregido", "Otra Direccion", null);
+        Guia guia = service.sincronizarDesdeSap(deSap( 9999L, "Cliente Corregido", "Otra Direccion", null));
 
         assertEquals("Cliente X", guia.getCliente());
         assertEquals(FOLIO, guia.getFolio());
@@ -165,7 +176,7 @@ class GuiaServiceTest {
         rechazada.setEstado(EstadoGuia.RECHAZADA);
         when(guiaRepository.findByDocEntry(DOC_ENTRY)).thenReturn(Optional.of(rechazada));
 
-        service.sincronizarDesdeSap(DOC_ENTRY, 9999L, "Cliente Corregido", "Otra Direccion", null);
+        service.sincronizarDesdeSap(deSap( 9999L, "Cliente Corregido", "Otra Direccion", null));
 
         verify(guiaRepository, never()).save(any());
     }
@@ -179,7 +190,7 @@ class GuiaServiceTest {
         when(guiaRepository.findByDocEntry(DOC_ENTRY)).thenReturn(Optional.of(enReparto));
         devuelveLoQueGuarda();
 
-        Guia guia = service.sincronizarDesdeSap(DOC_ENTRY, FOLIO, "Cliente X", "Direccion Corregida", null);
+        Guia guia = service.sincronizarDesdeSap(deSap( FOLIO, "Cliente X", "Direccion Corregida", null));
 
         assertEquals(7, guia.getRepartidorId());
         assertTrue(guia.isRecibidaPorRepartidor());
@@ -197,7 +208,7 @@ class GuiaServiceTest {
         when(guiaRepository.findByDocEntry(DOC_ENTRY)).thenReturn(Optional.of(ubicada));
         devuelveLoQueGuarda();
 
-        Guia guia = service.sincronizarDesdeSap(DOC_ENTRY, FOLIO, "Cliente X", "Direccion Corregida", null);
+        Guia guia = service.sincronizarDesdeSap(deSap( FOLIO, "Cliente X", "Direccion Corregida", null));
 
         assertFalse(guia.tieneUbicacion());
         assertFalse(guia.isUbicacionAproximada());
@@ -211,7 +222,7 @@ class GuiaServiceTest {
         when(guiaRepository.findByDocEntry(DOC_ENTRY)).thenReturn(Optional.of(ubicada));
         devuelveLoQueGuarda();
 
-        Guia guia = service.sincronizarDesdeSap(DOC_ENTRY, FOLIO, "Cliente X", "Av. Siempre Viva 742", null);
+        Guia guia = service.sincronizarDesdeSap(deSap( FOLIO, "Cliente X", "Av. Siempre Viva 742", null));
 
         assertTrue(guia.tieneUbicacion());
     }
@@ -226,8 +237,8 @@ class GuiaServiceTest {
         when(guiaRepository.findByDocEntry(DOC_ENTRY)).thenReturn(Optional.of(interpretada));
         devuelveLoQueGuarda();
 
-        Guia guia = service.sincronizarDesdeSap(DOC_ENTRY, FOLIO, "Cliente X", "Av. Siempre Viva 742",
-                "recibe en la tarde");
+        Guia guia = service.sincronizarDesdeSap(deSap( FOLIO, "Cliente X", "Av. Siempre Viva 742",
+                "recibe en la tarde"));
 
         assertEquals("recibe en la tarde", guia.getComentario());
         assertNull(guia.getVentanaDesde());
@@ -243,7 +254,7 @@ class GuiaServiceTest {
         when(guiaRepository.findByDocEntry(DOC_ENTRY)).thenReturn(Optional.of(definida));
         devuelveLoQueGuarda();
 
-        Guia guia = service.sincronizarDesdeSap(DOC_ENTRY, FOLIO, "Cliente X", "Av. Siempre Viva 742", "otra cosa");
+        Guia guia = service.sincronizarDesdeSap(deSap( FOLIO, "Cliente X", "Av. Siempre Viva 742", "otra cosa"));
 
         assertEquals(LocalTime.of(15, 0), guia.getVentanaDesde());
         assertEquals(OrigenHorario.BODEGA, guia.getOrigenHorario());
@@ -254,7 +265,103 @@ class GuiaServiceTest {
         when(guiaRepository.findByDocEntry(DOC_ENTRY)).thenReturn(Optional.empty());
         devuelveLoQueGuarda();
 
-        assertNull(service.sincronizarDesdeSap(DOC_ENTRY, FOLIO, "Cliente X", "Direccion", "  ").getComentario());
+        assertNull(service.sincronizarDesdeSap(deSap( FOLIO, "Cliente X", "Direccion", "  ")).getComentario());
+    }
+
+    // --- dirección ---
+
+    @Test
+    void sincronizarNoPisaLaDireccionQueCorrigioBodega() {
+        // Es la única que alguien miró: volver a ponerle la de SAP desharía la corrección
+        // en la sincronización siguiente y el repartidor iría otra vez a la vieja.
+        Guia corregida = guiaPendiente();
+        corregida.setDireccion("Los Militares 5001, Las Condes");
+        corregida.setOrigenDireccion(OrigenDireccion.BODEGA);
+        when(guiaRepository.findByDocEntry(DOC_ENTRY)).thenReturn(Optional.of(corregida));
+        devuelveLoQueGuarda();
+
+        Guia guia = service.sincronizarDesdeSap(deSap(FOLIO, "Cliente X", "Direccion Vieja 1", null));
+
+        assertEquals("Los Militares 5001, Las Condes", guia.getDireccion());
+        assertEquals(OrigenDireccion.BODEGA, guia.getOrigenDireccion());
+    }
+
+    @Test
+    void sincronizarRefrescaElPieAunqueBodegaHayaCorregidoLaDireccion() {
+        // El pie es contra lo que bodega compara: tiene que decir lo que el documento dice
+        // hoy. Lo que no se toca es la decisión que bodega tomó a partir de él.
+        Guia corregida = guiaPendiente();
+        corregida.setOrigenDireccion(OrigenDireccion.BODEGA);
+        corregida.setFooter("DESPACHAR A: vieja");
+        when(guiaRepository.findByDocEntry(DOC_ENTRY)).thenReturn(Optional.of(corregida));
+        devuelveLoQueGuarda();
+
+        Guia guia = service.sincronizarDesdeSap(new GuiaSap(DOC_ENTRY, FOLIO, "Cliente X", "Direccion Nueva",
+                OrigenDireccion.FOOTER, "HORARIO: 9 a 18", "DESPACHAR A: nueva HORARIO: 9 a 18",
+                "nueva", "9 a 18"));
+
+        assertEquals("DESPACHAR A: nueva HORARIO: 9 a 18", guia.getFooter());
+        assertEquals("nueva", guia.getDireccionFooter());
+        assertEquals("9 a 18", guia.getHorarioFooter());
+        assertEquals("Av. Siempre Viva 742", guia.getDireccion());
+    }
+
+    @Test
+    void sincronizarConservaLasCoordenadasDeLaDireccionQueCorrigioBodega() {
+        // Sin esto, cada sincronización le borraría las coordenadas a la dirección buena y
+        // la ruta la volvería a geocodificar para nada.
+        Guia corregida = guiaPendiente();
+        corregida.setOrigenDireccion(OrigenDireccion.BODEGA);
+        corregida.setLatitud(-33.45);
+        corregida.setLongitud(-70.66);
+        when(guiaRepository.findByDocEntry(DOC_ENTRY)).thenReturn(Optional.of(corregida));
+        devuelveLoQueGuarda();
+
+        Guia guia = service.sincronizarDesdeSap(deSap(FOLIO, "Cliente X", "Otra Direccion Distinta", null));
+
+        assertTrue(guia.tieneUbicacion());
+    }
+
+    @Test
+    void definirDireccionLaMarcaComoDeBodegaYBorraLasCoordenadas() {
+        Guia ubicada = guiaPendiente();
+        ubicada.setLatitud(-33.45);
+        ubicada.setLongitud(-70.66);
+        ubicada.setUbicacionAproximada(true);
+        when(guiaRepository.findById(1L)).thenReturn(Optional.of(ubicada));
+        devuelveLoQueGuarda();
+
+        Guia guia = service.definirDireccion(1L, "  Los Militares 5001, Las Condes  ");
+
+        assertEquals("Los Militares 5001, Las Condes", guia.getDireccion());
+        assertEquals(OrigenDireccion.BODEGA, guia.getOrigenDireccion());
+        assertFalse(guia.tieneUbicacion());
+        assertFalse(guia.isUbicacionAproximada());
+    }
+
+    @ParameterizedTest
+    @NullSource
+    @ValueSource(strings = {"", "   "})
+    void definirDireccionRechazaDejarlaVacia(String direccion) {
+        // A diferencia del horario: una guía sin horario se entrega igual, una sin
+        // dirección no se puede ni ubicar ni rutear.
+        ApiException e = assertThrows(ApiException.class, () -> service.definirDireccion(1L, direccion));
+
+        assertEquals(HttpStatus.BAD_REQUEST, e.getStatus());
+        verify(guiaRepository, never()).save(any());
+    }
+
+    @Test
+    void definirDireccionRechazaUnaGuiaYaResuelta() {
+        Guia entregada = guiaPendiente();
+        entregada.setEstado(EstadoGuia.ENTREGADA);
+        when(guiaRepository.findById(1L)).thenReturn(Optional.of(entregada));
+
+        ApiException e = assertThrows(ApiException.class,
+                () -> service.definirDireccion(1L, "Los Militares 5001"));
+
+        assertEquals(HttpStatus.CONFLICT, e.getStatus());
+        verify(guiaRepository, never()).save(any());
     }
 
     // --- horario ---
@@ -370,7 +477,7 @@ class GuiaServiceTest {
     // --- lecturas según el rol ---
 
     private static final UsuarioActual JEFE = new UsuarioActual(9, Rol.JEFE_BODEGA);
-    private static final UsuarioActual REPARTIDOR_7 = new UsuarioActual(7, Rol.REPARTIDOR);
+    private static final UsuarioActual REPARTIDOR_7 = new UsuarioActual(7, Rol.Despachador);
 
     @Test
     void elJefeDeBodegaListaTodasLasGuias() {
@@ -443,7 +550,7 @@ class GuiaServiceTest {
         when(guiaRepository.findById(1L)).thenReturn(Optional.of(guiaConRepartidor()));
 
         ApiException e = assertThrows(ApiException.class,
-                () -> service.obtenerPara(1L, new UsuarioActual(8, Rol.REPARTIDOR)));
+                () -> service.obtenerPara(1L, new UsuarioActual(8, Rol.Despachador)));
 
         assertEquals(HttpStatus.FORBIDDEN, e.getStatus());
     }

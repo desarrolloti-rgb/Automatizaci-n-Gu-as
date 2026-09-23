@@ -9,6 +9,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import com.calimport.guias.model.OrigenDireccion;
+import com.calimport.guias.sap.FooterDespacho;
 import com.calimport.guias.sap.GuiaSap;
 import com.calimport.guias.sap.SapClient;
 
@@ -45,7 +47,14 @@ public class GuiaSyncService {
     }
 
     public Resultado sincronizarDesde(LocalDate desde) {
-        JsonNode respuesta = sapClient.fetchGuiasDeDespacho(desde, filtroExtra, udfEstadoLogistico);
+        return sincronizar(desde, null);
+    }
+
+    /**
+     * @param hasta última fecha incluida, o {@code null} para no acotar por arriba.
+     */
+    public Resultado sincronizar(LocalDate desde, LocalDate hasta) {
+        JsonNode respuesta = sapClient.fetchGuiasDeDespacho(desde, hasta, filtroExtra, udfEstadoLogistico);
 
         JsonNode value = respuesta == null ? null : respuesta.get("value");
         if (value == null || !value.isArray()) {
@@ -65,11 +74,11 @@ public class GuiaSyncService {
         }
 
         for (GuiaSap guia : guias) {
-            guiaService.sincronizarDesdeSap(guia.docEntry(), guia.folio(), guia.cliente(), guia.direccion(),
-                    guia.comentario());
+            guiaService.sincronizarDesdeSap(guia);
         }
 
-        log.info("Sincronizacion desde {}: {} guias, {} filas descartadas", desde, guias.size(), descartadas);
+        log.info("Sincronizacion {} a {}: {} guias, {} filas descartadas",
+                desde, hasta == null ? "hoy" : hasta, guias.size(), descartadas);
         return new Resultado(guias.size(), descartadas);
     }
 
@@ -83,26 +92,49 @@ public class GuiaSyncService {
             log.warn("Fila de SAP sin DocEntry o FolioNumber, se ignora: {}", fila);
             return null;
         }
+        String pie = textoDe(fila, "ClosingRemarks");
+        FooterDespacho footer = FooterDespacho.de(pie);
+        boolean delPie = footer.direccionUbicable();
+
         return new GuiaSap(
                 fila.get("DocEntry").asInt(),
                 fila.get("FolioNumber").asLong(),
-                textoDe(fila, "CardName"),
-                normalizarDireccion(direccionDeDespacho(fila)),
-                unirLineas(textoDe(fila, "Comments"), " "));
+                recortar(textoDe(fila, "CardName"), 255),
+                recortar(normalizarDireccion(delPie ? footer.direccion() : direccionDeLogistica(fila)), 255),
+                delPie ? OrigenDireccion.FOOTER : OrigenDireccion.LOGISTICA,
+                // Comments y el pie son dos campos distintos de SAP y se guardan por
+                // separado: mezclarlos deja un texto que no es ninguno de los dos y que
+                // despues no hay forma de volver a separar.
+                recortar(unirLineas(textoDe(fila, "Comments"), " "), 2000),
+                recortar(unirLineas(pie, " "), 2000),
+                recortar(normalizarDireccion(footer.direccion()), 255),
+                recortar(footer.horario(), 255));
     }
 
     /**
-     * En SAP, {@code Address} es la direccion de <b>facturacion</b> y {@code Address2} la
-     * de <b>despacho</b> — lo confirma el AddressExtension del documento, donde
-     * ShipToStreet coincide con Address2 y BillToStreet con Address. Al repartidor le
-     * sirve la de despacho: usar Address lo mandaria a donde se emite la factura.
+     * La direccion de la pestana Logistica del documento, que sale de la ficha del cliente.
+     * Solo se usa cuando el pie no trae una que se pueda ubicar: es la que puede estar
+     * desactualizada, y por eso la guia queda marcada con {@link OrigenDireccion#LOGISTICA}
+     * para que bodega la confirme contra el pie.
      *
-     * <p>Cuando el cliente no tiene una direccion de despacho aparte, Address2 puede venir
-     * vacia; en ese caso se cae a Address, que para ese cliente son la misma.
+     * <p>En SAP {@code Address} es la direccion de <b>facturacion</b> y {@code Address2} la
+     * de <b>despacho</b> — lo confirma el AddressExtension del documento, donde
+     * ShipToStreet coincide con Address2 y BillToStreet con Address. Usar Address mandaria
+     * al repartidor a donde se emite la factura; solo se recurre a ella cuando el cliente
+     * no tiene direccion de despacho aparte y Address2 viene vacia.
      */
-    private static String direccionDeDespacho(JsonNode fila) {
+    private static String direccionDeLogistica(JsonNode fila) {
         String despacho = textoDe(fila, "Address2");
         return despacho.isEmpty() ? textoDe(fila, "Address") : despacho;
+    }
+
+    /**
+     * Corta lo que no cabe en su columna. Un texto de SAP mas largo que la columna no
+     * guarda una guia recortada: lanza, y esa excepcion se lleva por delante la
+     * sincronizacion completa. Un comentario cortado es mucho mejor que ninguna guia.
+     */
+    private static String recortar(String texto, int largo) {
+        return texto.length() <= largo ? texto : texto.substring(0, largo);
     }
 
     private static String textoDe(JsonNode fila, String campo) {
@@ -114,16 +146,20 @@ public class GuiaSyncService {
      * lineas vacias: "SAN NICOLAS 630\r\r SANTIAGO\rCHILE". Tal cual, en el celular del
      * repartidor se ve todo pegoteado en una linea. Se parte por los saltos y se rearma
      * separando por comas.
+     *
+     * <p>El punto final se saca: las del pie del documento vienen escritas como frase
+     * ("..., PEÑAFLOR.") y ese punto viaja tal cual a la consulta del geocodificador.
      */
     private static String normalizarDireccion(String direccion) {
-        return unirLineas(direccion, ", ");
+        return unirLineas(direccion, ", ").replaceAll("\\.+$", "").trim();
     }
 
     private static String unirLineas(String texto, String separador) {
         if (texto == null || texto.isBlank()) {
             return "";
         }
-        return java.util.Arrays.stream(texto.split("[\\r\\n]+"))
+        // Tambien por tabulacion: el pie del documento separa sus secciones con "\t\r".
+        return java.util.Arrays.stream(texto.split("[\\t\\r\\n]+"))
                 .map(String::trim)
                 .filter(parte -> !parte.isEmpty())
                 .reduce((a, b) -> a + separador + b)

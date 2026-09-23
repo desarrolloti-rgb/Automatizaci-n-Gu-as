@@ -22,8 +22,13 @@ WorkingDirectory=/opt/guias
 
 # Escucha solo en loopback: a internet se sale por nginx, nunca directo al 8080.
 # -Xmx512m porque la VM es e2-small y comparte los 2 GB con el panel y con Postgres.
+# El .env se IMPORTA, no se pasa como config.location: esa propiedad reemplaza las
+# ubicaciones por defecto y dejaria fuera el application.properties que va dentro del jar,
+# que es donde estan casi todos los valores. El sufijo [.properties] es obligatorio porque
+# Spring elige el lector por la extension y ".env" no le dice nada: sin el, falla al
+# arrancar con "File extension is not known to any PropertySourceLoader".
 ExecStart=/usr/bin/java -Xmx512m -jar /opt/guias/guias-backend.jar \
-    --spring.config.location=/opt/guias/.env \
+    --spring.config.import=file:/opt/guias/.env[.properties] \
     --server.address=127.0.0.1 \
     --server.port=8080
 

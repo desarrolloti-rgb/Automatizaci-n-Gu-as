@@ -48,7 +48,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @AutoConfigureMockMvc
 class GuiaControllerTest {
 
-    private static final UsuarioActual REPARTIDOR = new UsuarioActual(7, Rol.REPARTIDOR);
+    private static final UsuarioActual REPARTIDOR = new UsuarioActual(7, Rol.Despachador);
     private static final UsuarioActual JEFE = new UsuarioActual(9, Rol.JEFE_BODEGA);
 
     @Autowired
@@ -71,7 +71,7 @@ class GuiaControllerTest {
 
     @BeforeEach
     void setUp() {
-        repartidor = "Bearer " + jwtTokenProvider.generateToken("juan@calimport.cl", 7, "Juan Perez", Rol.REPARTIDOR);
+        repartidor = "Bearer " + jwtTokenProvider.generateToken("juan@calimport.cl", 7, "Juan Perez", Rol.Despachador);
         jefe = "Bearer " + jwtTokenProvider.generateToken("jefe@calimport.cl", 9, "Jefe Bodega", Rol.JEFE_BODEGA);
     }
 
@@ -394,7 +394,7 @@ class GuiaControllerTest {
         mockMvc.perform(post("/api/guias/sincronizar"))
                 .andExpect(status().isUnauthorized());
 
-        verify(guiaSyncService, never()).sincronizarDesde(any());
+        verify(guiaSyncService, never()).sincronizar(any(), any());
     }
 
     @Test
@@ -402,12 +402,12 @@ class GuiaControllerTest {
         mockMvc.perform(post("/api/guias/sincronizar").header("Authorization", repartidor))
                 .andExpect(status().isForbidden());
 
-        verify(guiaSyncService, never()).sincronizarDesde(any());
+        verify(guiaSyncService, never()).sincronizar(any(), any());
     }
 
     @Test
     void sincronizarDevuelveElResumenDeLoImportado() throws Exception {
-        when(guiaSyncService.sincronizarDesde(LocalDate.of(2026, 8, 1)))
+        when(guiaSyncService.sincronizar(LocalDate.of(2026, 8, 1), null))
                 .thenReturn(new GuiaSyncService.Resultado(12, 1));
 
         mockMvc.perform(post("/api/guias/sincronizar")
@@ -420,18 +420,44 @@ class GuiaControllerTest {
 
     @Test
     void sincronizarSinFechaUsaHoy() throws Exception {
-        when(guiaSyncService.sincronizarDesde(LocalDate.now()))
+        when(guiaSyncService.sincronizar(LocalDate.now(), null))
                 .thenReturn(new GuiaSyncService.Resultado(0, 0));
 
         mockMvc.perform(post("/api/guias/sincronizar").header("Authorization", jefe))
                 .andExpect(status().isOk());
 
-        verify(guiaSyncService).sincronizarDesde(LocalDate.now());
+        verify(guiaSyncService).sincronizar(LocalDate.now(), null);
+    }
+
+    @Test
+    void sincronizarAceptaUnRangoDeFechas() throws Exception {
+        // Acotar por arriba sirve para reimportar un dia puntual sin arrastrar todo lo
+        // emitido despues.
+        when(guiaSyncService.sincronizar(LocalDate.of(2026, 8, 1), LocalDate.of(2026, 8, 31)))
+                .thenReturn(new GuiaSyncService.Resultado(5, 0));
+
+        mockMvc.perform(post("/api/guias/sincronizar")
+                        .param("desde", "2026-08-01")
+                        .param("hasta", "2026-08-31")
+                        .header("Authorization", jefe))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.sincronizadas").value(5));
+    }
+
+    @Test
+    void unRangoAlRevesEsBadRequestYNoLlegaASap() throws Exception {
+        mockMvc.perform(post("/api/guias/sincronizar")
+                        .param("desde", "2026-08-31")
+                        .param("hasta", "2026-08-01")
+                        .header("Authorization", jefe))
+                .andExpect(status().isBadRequest());
+
+        verify(guiaSyncService, never()).sincronizar(any(), any());
     }
 
     @Test
     void sincronizarConSapCaidoDevuelveBadGateway() throws Exception {
-        when(guiaSyncService.sincronizarDesde(any()))
+        when(guiaSyncService.sincronizar(any(), any()))
                 .thenThrow(new RuntimeException("connection timeout"));
 
         mockMvc.perform(post("/api/guias/sincronizar").header("Authorization", jefe))

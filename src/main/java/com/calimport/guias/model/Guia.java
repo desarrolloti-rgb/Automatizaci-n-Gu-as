@@ -39,8 +39,35 @@ public class Guia {
     @Column(nullable = false)
     private String direccion;
 
-    /** Comments de SAP. Suele traer el horario de recepción escrito a mano. */
+    /**
+     * Lo que el repartidor tiene que leer: el horario, el contacto y el teléfono del pie
+     * del documento, más los {@code Comments} de SAP, todo en una línea.
+     */
+    @Column(length = 2000)
     private String comentario;
+
+    /**
+     * El pie del documento en SAP ({@code ClosingRemarks}), crudo y sin interpretar.
+     *
+     * <p>Es la evidencia de dónde salieron la dirección y el horario. Bodega puede
+     * corregirlos, pero esto sigue mostrando qué decía el documento: sin él, una dirección
+     * corregida no se puede contrastar con nada.
+     */
+    @Column(length = 2000)
+    private String footer;
+
+    /** La dirección que se leyó del pie, tal cual. No se corrige: para eso está {@link #direccion}. */
+    private String direccionFooter;
+
+    /** El horario que se leyó del pie, tal cual lo escribió el vendedor. */
+    private String horarioFooter;
+
+    /**
+     * De dónde salió {@link #direccion}. Null en las guías importadas antes de que
+     * existiera el campo.
+     */
+    @Enumerated(EnumType.STRING)
+    private OrigenDireccion origenDireccion;
 
     // --- Datos para armar la ruta ---
 
@@ -76,6 +103,16 @@ public class Guia {
     private EstadoGuia estado = EstadoGuia.PENDIENTE;
 
     private Instant fechaEntrega;
+
+    /**
+     * Cuándo la evidencia llegó a SAP: el PATCH que escribe {@code U_UrlFoto}.
+     *
+     * <p>No es lo mismo que {@link #fechaEntrega}. Esa es cuándo el repartidor cerró la
+     * guía en su celular, que puede ser en la calle y sin señal; ésta es cuándo el dato
+     * salió de esta app y quedó visible para el resto de la empresa. Entre las dos puede
+     * haber minutos o, si SAP estaba caído, bastante más.
+     */
+    private Instant fechaFotoEnSap;
 
    /// --- Evidencia fotográfica ---
 
@@ -168,6 +205,46 @@ public class Guia {
 
     public void setComentario(String comentario) {
         this.comentario = comentario;
+    }
+
+    public String getFooter() {
+        return footer;
+    }
+
+    public void setFooter(String footer) {
+        this.footer = footer;
+    }
+
+    public String getDireccionFooter() {
+        return direccionFooter;
+    }
+
+    public void setDireccionFooter(String direccionFooter) {
+        this.direccionFooter = direccionFooter;
+    }
+
+    public String getHorarioFooter() {
+        return horarioFooter;
+    }
+
+    public void setHorarioFooter(String horarioFooter) {
+        this.horarioFooter = horarioFooter;
+    }
+
+    public OrigenDireccion getOrigenDireccion() {
+        return origenDireccion;
+    }
+
+    public void setOrigenDireccion(OrigenDireccion origenDireccion) {
+        this.origenDireccion = origenDireccion;
+    }
+
+    public Instant getFechaFotoEnSap() {
+        return fechaFotoEnSap;
+    }
+
+    public void setFechaFotoEnSap(Instant fechaFotoEnSap) {
+        this.fechaFotoEnSap = fechaFotoEnSap;
     }
 
     public Double getLatitud() {

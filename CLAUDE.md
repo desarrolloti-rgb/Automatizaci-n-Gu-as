@@ -53,6 +53,13 @@ a `localhost:5432/guias_local` con usuario `postgres`; se puede cambiar con `DB_
 `DB_USER` y `DB_PASSWORD` sin tocar el archivo. Las fotos siguen en disco (`./data/fotos`);
 `./data/guias-local.mv.db`, si quedó de antes, ya no se usa.
 
+Tres de las guías de ejemplo traen **pie del documento**, con las tres formas reales de
+escribirlo (etiquetas con dos puntos y saltos, etiquetas sueltas sin dos puntos, y todo de
+corrido en un párrafo): sin ellas no hay cómo probar en local "Ver pie de SAP", la marca de
+dirección por confirmar ni el editor de dirección. El pie se parte con el mismo
+`FooterDespacho` de la sincronización, así lo que se ve en local es lo que va a pasar de
+verdad.
+
 `DatosLocales` siembra los usuarios y **15 guías** en direcciones reales repartidas por todo
 Santiago, solo si la tabla `guia` está vacía. Son quince y no cinco para que la ruta
 optimizada tenga algo que resolver: con paradas de un solo sector cualquier orden da lo mismo
@@ -72,14 +79,14 @@ exige token. Disco local: no sirve en Cloud Run, ahí habrá que ir a Cloud Stor
 Variables de entorno (`application.properties` las exige; sin ellas la app no arranca):
 `DB_URL`, `DB_USER`, `DB_PASSWORD`, `SAP_BASE_URL`, `SAP_COMPANY_DB`, `SAP_USERNAME`,
 `SAP_PASSWORD`, `SAP_TRUST_SELF_SIGNED`, `JWT_SECRET`, `JWT_TTL_MINUTES` (default 480),
-`GUIAS_SYNC_FILTRO_EXTRA`, `AUTH_JEFES_BODEGA` (emails separados por coma; vacío = nadie es
-jefe de bodega con login SAP, ver "Roles").
+`GUIAS_SYNC_FILTRO_EXTRA`.
 
 Rutas (opcionales para arrancar; sin ellas falla solo `POST /api/rutas`): `RUTAS_ORIGEN_LAT`,
 `RUTAS_ORIGEN_LNG`, `RUTAS_MINUTOS_POR_PARADA` (10), `RUTAS_PARADAS_POR_TRAMO_MAPS` (10),
 `RUTAS_VELOCIDAD_KMH` (25), `RUTAS_OSM_USER_AGENT`, y los selectores `RUTAS_GEOCODIFICADOR`
-(`osm` | `google`), `RUTAS_OPTIMIZADOR` (`local` | `google`) y `RUTAS_COMENTARIOS` (`reglas` |
-`gemini`). Solo si algún selector usa Google: `GCP_PROJECT_ID`, `GOOGLE_MAPS_API_KEY`,
+(`osm` | `cascada` | `google`), `RUTAS_OPTIMIZADOR` (`local` | `google`) y
+`RUTAS_COMENTARIOS` (`reglas` | `gemini`). Solo si algún selector usa Google (`cascada`
+incluido): `GCP_PROJECT_ID`, `GOOGLE_MAPS_API_KEY`,
 `GEMINI_MODEL`, `GEMINI_LOCATION` (default `global`); Route Optimization y Vertex AI usan
 Application Default Credentials, no API key.
 
@@ -103,6 +110,50 @@ para no reventar más tarde con un "column does not exist".
   que son de SAP (folio, cliente, dirección, comentario), de modo que llegan las
   correcciones hechas en SAP antes del despacho. Si cambia la dirección se borran las
   coordenadas; si cambia el comentario se borra el horario interpretado (no el del bodeguero).
+- **La dirección y el horario salen del pie del documento**, no de la ficha del cliente. En
+  esta instalación el vendedor escribe a dónde va el camión en `ClosingRemarks` (el
+  `T0.[Footer]` de una consulta), con etiquetas: `DESPACHAR A`, `CONTACTO`, `CEL`,
+  `HORARIO`. **No hay plantilla** —de cuatro pies reales no hay dos iguales—, así que
+  `FooterDespacho` **busca las etiquetas en todo el texto y no por línea**: los dos puntos
+  son opcionales ("CONTACTO MATIAS CANIU"), la etiqueta puede venir abreviada ("At.",
+  "Cel.:") y hay pies enteros escritos de corrido en un párrafo sin un solo salto. El valor
+  de cada etiqueta es lo que va hasta la siguiente; lo anterior a la primera —condiciones de
+  pago, casi siempre— queda en `otros` y viaja igual, porque "CHEQUE A 30 DÍAS CON
+  CONTRAENTREGA" le importa al repartidor. `ClosingRemarks` es campo estándar, no un UDF:
+  pedirlo no corre el riesgo del 400.
+- **El pie se guarda entero, y lo que se leyó de él también.** `footer` es el
+  `ClosingRemarks` crudo; `direccion_footer` y `horario_footer`, lo que el parser sacó, sin
+  corregir. Se refrescan en **cada** sincronización, incluso cuando bodega ya corrigió la
+  dirección: el pie es contra lo que bodega compara, así que tiene que decir lo que el
+  documento dice hoy. Lo que no se pisa es la decisión que bodega tomó a partir de él.
+- **La dirección del pie le gana a `Address2` solo si se puede ubicar**, o sea si tiene un
+  número: "FRANCISCO DE CAMARGO 14317, SAN BERNARDO" sí, "BODEGA Fruna" no. Cambiar una
+  dirección buena de la ficha por un nombre de lugar que el geocodificador no encuentra es
+  peor que no tocar nada; cuando pasa, el texto del pie viaja en el comentario igual. Si el
+  pie no trae dirección se usa `Address2` y después `Address`, como siempre.
+- **`origen_direccion` dice de cuál desconfiar** (`OrigenDireccion`): `FOOTER` la escribió
+  el vendedor para este despacho, `LOGISTICA` sale de la ficha del cliente —y bodega la ve
+  marcada para confirmarla contra el pie—, y `BODEGA` es la que alguien miró y corrigió con
+  `PATCH /api/guias/{id}/direccion`. Una dirección `BODEGA` **no la pisa ninguna
+  sincronización** y conserva sus coordenadas, igual que pasa con el horario. A diferencia
+  del horario, no se puede dejar vacía: sin horario una guía se entrega igual, sin dirección
+  no se puede ni ubicar ni rutear. Null en las guías anteriores a la migración `V7`.
+- **`ClosingRemarks` y `Comments` son dos campos distintos de SAP y no se mezclan.**
+  `comentario` es y sigue siendo `Comments`; el pie vive en `footer`. Juntarlos daba un
+  texto que no era ninguno de los dos y que después no había forma de volver a separar.
+- **El horario se interpreta de `horario_footer`, y solo si no hay, de `comentario`**
+  (`RutaService.textoConElHorario`). El pie gana porque es de este despacho y porque llega
+  limpio: solo la frase del "HORARIO:", sin teléfonos ni direcciones que puedan leerse como
+  una hora. El horario interpretado se descarta cuando cambia cualquiera de los dos textos.
+- **El pie entero viaja al repartidor** (`RutaResponse.Parada.footer` y `Guia.footer`): ahí
+  están el contacto y el teléfono de quien recibe, que en la calle con el portón cerrado es
+  lo único que sirve. Va crudo, no resumido.
+- **Una guía que dice "DESPACHAR VÍA SAMEX" no la reparte Calimport** y su dirección puede
+  estar en cualquier parte del país (hay una a Calama). `FooterDespacho` ya lo parsea
+  (`transportista()`) pero **no se guarda ni se filtra todavía**: hoy solo se ve leyendo el
+  pie. `GUIAS_SYNC_FILTRO_EXTRA` es una condición OData y no alcanza a leerlo — la salida
+  probable es `TransportationCode` (la forma de envío, tabla `OSHP`), pendiente de
+  confirmar qué códigos usa esta instalación.
 - **Una guía ya resuelta (ENTREGADA o RECHAZADA) no se toca nunca más**: su contenido es la
   evidencia de lo que pasó, y reescribirlo la borraría.
 - Los campos que genera la app —repartidor, estado, foto— no se tocan en la sincronización.
@@ -122,6 +173,14 @@ El estado vive en SAP en cuatro UDF de `DeliveryNotes`, y la app los mantiene al
 `P` es PENDIENTE sin retirar y `T` es PENDIENTE con `recibidaPorRepartidor`. `EstadoLogistico`
 lo traduce al momento de enviar. No se guarda un cuarto valor en `EstadoGuia` a propósito:
 sería una segunda representación del mismo hecho, y dos copias de un dato se desincronizan.
+
+**Una guía queda "despachada" cuando la foto llega a SAP**, no cuando el repartidor la
+cierra en el celular. `fecha_foto_en_sap` se escribe en `SincronizacionSapService.empujar`,
+una sola vez, cuando el PATCH con `U_UrlFoto` resulta; un reintento no cambia cuándo llegó.
+Entre `fecha_entrega` y ésta pueden pasar minutos o, si SAP estaba caído, bastante más: es
+justamente esa diferencia la que se quería poder ver. **Ojo**: mientras
+`guias.sap.udf-estado-logistico` siga en `false`, `empujar` retorna sin llamar a SAP y este
+campo **nunca se llena**. Se activa solo el día que existan los UDF.
 
 **El orden importa: primero Postgres, después SAP.** El repartidor trabaja en la calle y el
 Service Layer no siempre contesta; si la entrega dependiera de que SAP responda en ese
@@ -159,6 +218,7 @@ Cada paso es una interfaz con dos implementaciones, elegidas con `@ConditionalOn
 | Paso | Gratis (defecto) | Google (pagado) |
 |---|---|---|
 | `Geocodificador` | `osm/NominatimClient`: OpenStreetMap, busca "número calle" + comuna y si no, texto libre | `google/GeocodingClient` |
+| ↳ mezcla | `GeocodificadorEnCascada` (`rutas.geocodificador=cascada`): OSM y, **solo si no encuentra nada**, Google | |
 | `InterpreteComentarios` | `InterpreteReglas`: patrones ("de 9 a 13", "hasta las 12", "solo en la mañana"…); no arma nota | `InterpreteGemini` |
 | `OptimizadorRutas` | `OptimizadorLocal`: línea recta × 1,35 a `velocidad-promedio-kmh`, mismos costos que Google, vecino más conveniente + búsqueda local | `OptimizadorGoogle` |
 
@@ -167,9 +227,21 @@ Límites de lo gratuito, a tener presentes:
   `NominatimClient` las espacia (15 guías nuevas ≈ 15 s; las coordenadas quedan guardadas).
   Con las guías de ejemplo ubica todas, pero ~2 de cada 3 solo a nivel de calle
   (`ubicacionAproximada`), así que el orden puede no ser el óptimo real.
+- **Nominatim busca por coincidencia exacta y las direcciones de SAP no vienen exactas.**
+  Medido contra cinco que fallaron en producción: dos eran **errores de tipeo**
+  ("AV. VICUÑA MACKENA" por Mackenna, "DOMINGO ARTEGA" por Arteaga) — escritas bien las
+  ubica exacto, con el typo no las ubica nunca; las otras tres existen pero escritas como
+  las escribe un vendedor ("Bodega Planta, SITE CPP (Promedio) KM. 63 LONGITUDINAL SUR")
+  y solo aparecen si se les limpia el texto a mano. Limpiar con reglas tapa algunos casos y
+  **ningún typo**: para eso está `cascada`. Una dirección que no se ubica **bloquea la ruta
+  completa** con un 422 que nombra los folios; bodega la arregla en SAP y vuelve a
+  sincronizar, o la corrige a mano con `PATCH /api/guias/{id}/direccion`.
 - **`OptimizadorLocal`** no conoce calles ni tráfico: las horas de llegada son estimadas.
 - **`InterpreteReglas`** solo lee lo que calza con sus patrones; lo demás lo corrige bodega
-  con `PATCH /api/guias/{id}/horario`.
+  con `PATCH /api/guias/{id}/horario`. Descarta a propósito las horas precedidas por "no
+  reciben", "colación", "almuerzo" o "cerrado": "horario colación 13 a 15hrs" es cuando la
+  bodega del cliente **está cerrada**, y leerlo como ventana manda al repartidor justo a esa
+  hora. Sin ventana la guía se ordena por cercanía y el horario igual se lee en el comentario.
 
 **`SapSessionManager` / `SapClient`** siguen el mismo patrón que el otro backend de
 Calimport: el manager mantiene la cookie `B1SESSION`, renueva ante 401 y reintenta una vez;
@@ -192,7 +264,8 @@ todas.
 y repartidor) · `POST /api/guias` · `PATCH /api/guias/{id}/repartidor` ·
 `PATCH /api/guias/{id}/recepcion` · `POST /api/guias/{id}/entrega` ·
 `POST /api/guias/{id}/rechazo` · `PATCH /api/guias/{id}/sincronizada` ·
-`PATCH /api/guias/{id}/horario` · `PATCH /api/guias/{id}/reapertura` (R → P, bodega) ·
+`PATCH /api/guias/{id}/horario` · `PATCH /api/guias/{id}/direccion` (bodega corrige la
+dirección leyendo el pie) · `PATCH /api/guias/{id}/reapertura` (R → P, bodega) ·
 `POST /api/rutas` · `GET /api/rutas?repartidorId=&fecha=` · `GET /api/rutas/mia?fecha=`.
 Cada método declara su `@PreAuthorize` (ver "Roles"); un endpoint nuevo sin anotación
 queda abierto a cualquier usuario logueado.
@@ -205,26 +278,26 @@ respuesta, cambiarlo en los dos lados.
 
 - **`JEFE_BODEGA`**: sincroniza, crea y asigna guías, define horarios, genera rutas y ve
   **todas** las guías.
-- **`REPARTIDOR`**: ve **sólo sus guías** y sólo sobre ésas actúa.
+- **`Despachador`**: ve **sólo sus guías** y sólo sobre ésas actúa.
 
 **De dónde sale.** El claim `role` es la única fuente para autorizar; `UsuarioActual.de()`
 lo lee junto al `employeeId` (no volver a sacar `Claims` a mano en los controllers). Un
-claim ausente o desconocido se lee como `REPARTIDOR` (`Rol.desdeClaim`), así un token viejo
+claim ausente o desconocido se lee como `Despachador` (`Rol.desdeClaim`), así un token viejo
 nunca gana permisos. `JwtAuthenticationFilter` arma la authority `ROLE_<rol>`.
 `Repartidor.rol` (migración `V4__rol_usuario.sql`) se refresca en cada login;
-`listarActivos()` y `RutaService` sólo aceptan `REPARTIDOR`, porque el jefe está en la
+`listarActivos()` y `RutaService` sólo aceptan `Despachador`, porque el jefe está en la
 misma tabla pero no reparte.
 
-- `auth.modo=local`: campo `rol` de `auth.local.usuarios[n]`, `REPARTIDOR` si no se declara.
-- `auth.modo=sap`: **provisorio**, `AUTH_JEFES_BODEGA` lista los emails que entran como
-  jefe; el resto es `REPARTIDOR`. Lo correcto es un campo de `EmployeesInfo` (`JobTitle` o
-  un `U_*`), pero **no está confirmado contra el metadata real**: verificarlo antes de
-  reemplazar la lista, y no inventar el campo.
+- `auth.modo=local`: campo `rol` de `auth.local.usuarios[n]`, `Despachador` si no se declara.
+- `auth.modo=sap`: sale del campo `JobTitle` de `EmployeesInfo`. Si (normalizado a
+  minúsculas) **empieza con "jefe"** → `JEFE_BODEGA` — el prefijo tolera el typo real de
+  esta instalación ("Jefe bogeda") y variantes como "Jefe de bodega". Cualquier otro cargo,
+  vacío o ausente → `Despachador`, el de menos permisos.
 
 | Endpoint | Jefe de bodega | Repartidor |
 |---|---|---|
 | `POST /api/guias/sincronizar`, `POST /api/guias` | sí | 403 |
-| `PATCH /api/guias/{id}/repartidor`, `PATCH .../horario` | sí | 403 |
+| `PATCH /api/guias/{id}/repartidor`, `PATCH .../horario`, `PATCH .../direccion` | sí | 403 |
 | `POST /api/rutas`, `GET /api/rutas?repartidorId=` | sí | 403 (usa `/mia`) |
 | `GET /api/repartidores`, `GET /api/sap/**` | sí | 403 |
 | `GET /api/guias` | todas, con cualquier filtro | sólo las suyas; `?repartidorId=` ajeno → 403 |
@@ -260,9 +333,15 @@ nginx compartido. Acá solo está lo propio de Guías:
 
 | Archivo | Cuándo |
 |---|---|
-| `env.ejemplo` | Plantilla de `/opt/guias/.env` — completar, `chown guias:guias` y `chmod 600` |
-| `guias.service` | A `/etc/systemd/system/`, luego `systemctl enable --now guias` |
+| `preparar-vm.sh` | **Una vez**, dentro de la VM: Java 21, Postgres, usuario, `/opt/guias`, `.env`, el servicio y el respaldo diario |
+| `env.ejemplo` | Plantilla de `/opt/guias/.env`. La copia `preparar-vm.sh` y le genera la clave de Postgres |
+| `guias.service` | Lo instala `preparar-vm.sh` en `/etc/systemd/system/` |
 | `desplegar.ps1` | Cada despliegue, desde el PC |
+
+**`preparar-vm.sh` no clona el repositorio**, a diferencia del `instalar.sh` del panel:
+Guías se publica subiendo el jar y los estáticos por scp, así que el código fuente nunca
+vive en la VM. Se sube la carpeta `deploy/` entera y se corre desde ahí, porque el script
+lee `guias.service` y `env.ejemplo` de al lado.
 
 ```
 https://apps.calimport.cl/gd/  →  nginx (quita el prefijo)  →  127.0.0.1:8080
@@ -300,13 +379,60 @@ pese lo que debe.
 **Commitear no despliega**, igual que en Dashboard: un cambio de frontend necesita `pnpm
 build` y subida, aunque el commit ya esté hecho.
 
+**Dos cosas del PC de desarrollo que rompen el despliegue** y `desplegar.ps1` ya resuelve
+solas, pero conviene conocer porque el síntoma no se parece a la causa:
+
+- La tilde de "Chandía" en el perfil de usuario **rompe el túnel IAP**: gcloud arma el
+  `ProxyCommand` concatenando las rutas de su Python y de `gcloud.py` sin escaparlas, y
+  falla con `Special character '\xed' couldn't be escaped`. Es la misma tilde que parte el
+  classpath del wrapper de Maven. Se esquiva exponiendo el SDK por un enlace de directorio
+  en `C:\Users\Public\gcloudsdk` e invocándolo desde ahí.
+- Por lo mismo, gcloud **deduce mal el usuario remoto** (usa el de Windows) y OS Login lo
+  rechaza con un `Remote side unexpectedly closed network connection` que no explica nada.
+  El bueno lo dice `gcloud compute os-login describe-profile`.
+
+## Despliegue automático (pendiente)
+
+Hoy se publica a mano con `desplegar.ps1`, desde un PC. Eso no escala: depende de una
+máquina, de un sistema operativo y de que alguien se acuerde de correr los tests. El
+destino es el mismo patrón que ya usa Panel-Facturadores, **la VM tira los cambios**:
+
+```
+git push a main
+   └─> GitHub Actions: tests de backend y frontend, y build del jar y del dist
+         └─ si pasa: publica el artefacto y mueve la rama "produccion" a ese commit
+              └─> la VM (timer cada pocos minutos)
+                    ├─ ¿cambió "produccion"? si no, no hace nada
+                    ├─ baja el artefacto, lo instala y reinicia
+                    └─ si el servicio no responde: vuelve a la versión anterior
+```
+
+**La VM tira en vez de que GitHub entre**: así GitHub no guarda credenciales de Google
+Cloud ni acceso SSH, y comprometer el repositorio no da acceso a la VM ni a SAP.
+
+Tres restricciones que condicionan el diseño y hay que respetar:
+
+- **No se compila en la VM.** La e2-small tiene 2 GB compartidos con Postgres, el panel y
+  la JVM; un build de Maven más uno de Angular no entran. Por eso el artefacto se construye
+  en Actions y la VM solo lo instala — a diferencia del panel, que es Node sin build.
+- **La VM no tiene cuenta de servicio**, a propósito: quien entre a ella no hereda permisos
+  sobre el proyecto. Así que el artefacto no puede salir de un bucket privado de GCS sin
+  antes darle una identidad. La alternativa que no rompe esa decisión es publicarlo como
+  release del repositorio privado y bajarlo con la deploy key de solo lectura.
+- **Los tests tienen que correr también en la VM** antes de reiniciar, como hace el panel:
+  un artefacto que pasó en Actions puede fallar acá por configuración o por la base.
+
+Antes de automatizar nada falta lo básico: los dos repositorios están en la rama `max`, sin
+CI y sin protección de ramas. El orden es commitear, llevar a `main`, agregar el workflow de
+tests, y recién después el timer de publicación.
+
 **En la VM no se activa el perfil `local`**: se usa el default, que exige todas las
-variables del `.env`. Sin `AUTH_JEFES_BODEGA` nadie puede sincronizar ni asignar, y sin
-`RUTAS_ORIGEN_*` no se pueden generar rutas.
+variables del `.env`. Sin `RUTAS_ORIGEN_*` no se pueden generar rutas.
 
 Las **fotos viven en `/var/lib/guias/fotos`**, fuera del directorio de la app para que un
 despliegue no las pise. Junto con la base, son la evidencia de lo que pasó en terreno: el
-respaldo diario que deja `preparar-vm.sh` guarda 14 días, pero **queda en la misma VM** —
+respaldo diario que deja `preparar-vm.sh` (timer `respaldo-guias`, 03:30) guarda 14 días,
+pero **queda en la misma VM** —
 falta copiarlo a un bucket, porque un respaldo local no sirve si se pierde la máquina.
 
 Para diagnosticar: `systemctl status guias` y `journalctl -u guias -n 50 -f`.

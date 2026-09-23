@@ -53,8 +53,17 @@ public class InterpreteReglas implements InterpreteComentarios {
 
     private static final Pattern HORA_EXPLICITA =
             Pattern.compile("[:.]\\d{2}|\\d\\s*(?:hrs?|horas|h)\\b|\\b(?:am|pm)\\b", FLAGS);
-    /** "no reciben de 13 a 14" es la hora en que NO reciben: no es un horario de recepción. */
-    private static final Pattern NEGACION_PREVIA = Pattern.compile("\\bno\\s+(?:se\\s+)?recib\\w*\\s*$", FLAGS);
+    /**
+     * Lo que va antes de una hora y la descalifica como horario de recepción.
+     *
+     * <p>"No reciben de 13 a 14" es la hora en que NO reciben, y "horario colación 13 a
+     * 15hrs" —tal cual, del pie de una guía real— es el rato en que la bodega está cerrada.
+     * Leerlas como ventana de entrega manda al repartidor justo a la hora en que no lo van
+     * a atender, que es peor que no saber nada: sin ventana la guía se ordena por cercanía
+     * y el horario se lee en el comentario, que viaja completo.
+     */
+    private static final Pattern NEGACION_PREVIA = Pattern.compile(
+            "\\bno\\s+(?:se\\s+)?recib\\w*\\s*$|\\b(?:colaci[oó]n|almuerzo|cerrado)\\b[^\\d]*$", FLAGS);
 
     @Override
     public Interpretacion interpretar(String comentario) {
