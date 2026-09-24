@@ -149,6 +149,26 @@ public record FooterDespacho(String direccion, String contacto, String telefono,
                 contenido(partes, Seccion.OTROS));
     }
 
+    /**
+     * "RETIRA EN SUCURSAL", "CLIENTE RETIRA EN SUCURSAL", "MATERIAL SERA RETIRADO POR…":
+     * el cliente pasa a buscar la mercadería y ningún repartidor la lleva.
+     *
+     * <p>Se mira el <b>texto</b> porque el campo que corresponde no está lleno: SAP tiene
+     * la forma de envío "RETIRO CLIENTE" (código 4 de {@code ShippingTypes}), pero en las
+     * guías reales {@code TransportationCode} viene en {@code -1}. El día que empiecen a
+     * marcarlo, esto se reemplaza por una condición OData y se acaba la heurística.
+     *
+     * <p>Se busca la raíz "retir" en todo el pie. Es deliberadamente simple: las cuatro
+     * formas vistas en producción la comparten, y afinarla más arriesga dejar pasar una.
+     */
+    public boolean esRetiroEnLocal() {
+        return RETIRO.matcher(direccion).find()
+                || RETIRO.matcher(otros).find()
+                || RETIRO.matcher(contacto).find();
+    }
+
+    private static final Pattern RETIRO = Pattern.compile("\\bretir\\w*", FLAGS);
+
     /** Si el pie no aportó nada que la app pueda usar. */
     public boolean vacio() {
         return direccion.isEmpty() && contacto.isEmpty() && telefono.isEmpty()

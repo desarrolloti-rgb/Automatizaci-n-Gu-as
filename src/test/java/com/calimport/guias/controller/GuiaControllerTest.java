@@ -408,7 +408,7 @@ class GuiaControllerTest {
     @Test
     void sincronizarDevuelveElResumenDeLoImportado() throws Exception {
         when(guiaSyncService.sincronizar(LocalDate.of(2026, 8, 1), null))
-                .thenReturn(new GuiaSyncService.Resultado(12, 1));
+                .thenReturn(new GuiaSyncService.Resultado(12, 1, 0));
 
         mockMvc.perform(post("/api/guias/sincronizar")
                         .param("desde", "2026-08-01")
@@ -421,7 +421,7 @@ class GuiaControllerTest {
     @Test
     void sincronizarSinFechaUsaHoy() throws Exception {
         when(guiaSyncService.sincronizar(LocalDate.now(), null))
-                .thenReturn(new GuiaSyncService.Resultado(0, 0));
+                .thenReturn(new GuiaSyncService.Resultado(0, 0, 0));
 
         mockMvc.perform(post("/api/guias/sincronizar").header("Authorization", jefe))
                 .andExpect(status().isOk());
@@ -434,7 +434,7 @@ class GuiaControllerTest {
         // Acotar por arriba sirve para reimportar un dia puntual sin arrastrar todo lo
         // emitido despues.
         when(guiaSyncService.sincronizar(LocalDate.of(2026, 8, 1), LocalDate.of(2026, 8, 31)))
-                .thenReturn(new GuiaSyncService.Resultado(5, 0));
+                .thenReturn(new GuiaSyncService.Resultado(5, 0, 0));
 
         mockMvc.perform(post("/api/guias/sincronizar")
                         .param("desde", "2026-08-01")

@@ -42,8 +42,14 @@ public class GuiaSyncService {
         this.udfEstadoLogistico = udfEstadoLogistico;
     }
 
-    /** Cuántas guías se sincronizaron y cuántas filas de SAP se descartaron por venir incompletas. */
-    public record Resultado(int sincronizadas, int descartadas) {
+    /**
+     * Cuántas guías se sincronizaron, cuántas filas de SAP se descartaron por venir
+     * incompletas y cuántas se saltaron porque el cliente las retira en local.
+     *
+     * <p>Los retiros se cuentan y no se esconden: si el número sorprende, es la señal de
+     * que el filtro se está llevando algo que sí había que despachar.
+     */
+    public record Resultado(int sincronizadas, int descartadas, int retirosEnLocal) {
     }
 
     public Resultado sincronizarDesde(LocalDate desde) {
@@ -59,12 +65,19 @@ public class GuiaSyncService {
         JsonNode value = respuesta == null ? null : respuesta.get("value");
         if (value == null || !value.isArray()) {
             log.warn("SAP no devolvio un arreglo 'value' al pedir guias desde {}", desde);
-            return new Resultado(0, 0);
+            return new Resultado(0, 0, 0);
         }
 
         List<GuiaSap> guias = new ArrayList<>();
         int descartadas = 0;
+        int retiros = 0;
         for (JsonNode fila : value) {
+            // El retiro en local se mira antes de mapear: esa guia no la lleva nadie, asi
+            // que no tiene sentido ni geocodificarla ni mostrarla en la lista de reparto.
+            if (FooterDespacho.de(textoDe(fila, "ClosingRemarks")).esRetiroEnLocal()) {
+                retiros++;
+                continue;
+            }
             GuiaSap guia = mapear(fila);
             if (guia == null) {
                 descartadas++;
@@ -77,9 +90,9 @@ public class GuiaSyncService {
             guiaService.sincronizarDesdeSap(guia);
         }
 
-        log.info("Sincronizacion {} a {}: {} guias, {} filas descartadas",
-                desde, hasta == null ? "hoy" : hasta, guias.size(), descartadas);
-        return new Resultado(guias.size(), descartadas);
+        log.info("Sincronizacion {} a {}: {} guias, {} filas descartadas, {} de retiro en local",
+                desde, hasta == null ? "hoy" : hasta, guias.size(), descartadas, retiros);
+        return new Resultado(guias.size(), descartadas, retiros);
     }
 
     /**

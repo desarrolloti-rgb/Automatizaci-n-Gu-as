@@ -112,6 +112,37 @@ class FooterDespachoTest {
     }
 
     @Test
+    void reconoceLasGuiasQueRetiraElCliente() {
+        // Las cuatro formas vistas en produccion. Ninguna tiene marcada la forma de envio
+        // en SAP: el unico lugar donde consta es el texto.
+        for (String pie : new String[] {
+                "RETIRA EN SUCURSAL",
+                "CLIENTE RETIRA EN SUCURSAL",
+                "RETIRA EN SUCURSAL ANTOFAGASTA",
+                "MATERIAL SERA RETIRADO POR EL CLIENTE"}) {
+            assertTrue(FooterDespacho.de(pie).esRetiroEnLocal(), "deberia ser retiro: " + pie);
+        }
+    }
+
+    @Test
+    void unDespachoNormalNoSeConfundeConUnRetiro() {
+        for (String pie : new String[] {
+                "DESPACHAR A: AV.BERLIN PARCELA 34 C, PEÑAFLOR.",
+                "DESPACHAR A LO ESPEJO 1300, MAIPU, RM",
+                "PAGADO (TRANSFERENCIA) DESPACHAR VIA SAMEX A Calama"}) {
+            assertFalse(FooterDespacho.de(pie).esRetiroEnLocal(), "no deberia ser retiro: " + pie);
+        }
+    }
+
+    @Test
+    void unPieVacioNoEsRetiro() {
+        // Si el documento no dice nada, se despacha: dejar de importar una guia por silencio
+        // seria peor que importar una de mas.
+        assertFalse(FooterDespacho.de("").esRetiroEnLocal());
+        assertFalse(FooterDespacho.de(null).esRetiroEnLocal());
+    }
+
+    @Test
     void laEtiquetaValeConElValorAbajoOEnLaMismaLinea() {
         // "DESPACHAR A:" trae la direccion en la linea siguiente; "HORARIO:" la trae al lado.
         // Las dos formas conviven en el mismo documento, asi que las dos tienen que andar.

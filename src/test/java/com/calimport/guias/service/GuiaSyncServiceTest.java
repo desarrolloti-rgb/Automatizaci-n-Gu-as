@@ -19,6 +19,7 @@ import tools.jackson.databind.node.ObjectNode;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -210,6 +211,26 @@ class GuiaSyncServiceTest {
 
         assertEquals(0, resultado.sincronizadas());
         assertEquals(0, resultado.descartadas());
+    }
+
+    @Test
+    void lasGuiasDeRetiroEnLocalNoSeImportan() {
+        // Caso real (folio 310051): el cliente pasa a buscarla, ningun repartidor la lleva.
+        // Se cuenta aparte y no como "descartada", que significa fila incompleta.
+        ObjectNode retiro = fila(1, 310051L, "DESARROLLO DE TECNOLOGIAS", "JORGE MONTT S/N, CONCEPCION");
+        retiro.put("ClosingRemarks", "RETIRA EN SUCURSAL");
+        ObjectNode despacho = fila(2, 310052L, "INGENIERIA Y CONSTRUCCION", "MONTE PERDIDO 1500, LOS ANGELES");
+        despacho.put("ClosingRemarks", "DESPACHO DESDE SANTIAGO A LOS ANGELES");
+        when(sapClient.fetchGuiasDeDespacho(DESDE, null, "", false))
+                .thenReturn(respuestaCon(retiro, despacho));
+
+        GuiaSyncService.Resultado resultado = service.sincronizarDesde(DESDE);
+
+        assertEquals(1, resultado.sincronizadas());
+        assertEquals(0, resultado.descartadas());
+        assertEquals(1, resultado.retirosEnLocal());
+        verify(guiaService, never()).sincronizarDesdeSap(
+                argThat(g -> g != null && g.folio() == 310051L));
     }
 
     @Test
