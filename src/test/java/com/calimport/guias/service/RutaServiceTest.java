@@ -170,6 +170,20 @@ class RutaServiceTest {
     }
 
     @Test
+    void siNoSeEncuentraLaDireccionEntraConSuComunaComoAproximada() {
+        Guia sinUbicar = guiaUbicada(1);
+        sinUbicar.setLatitud(null);
+        sinUbicar.setLongitud(null);
+        when(geocodificador.geocodificar("Direccion 1")).thenReturn(Optional.empty());
+        when(geocodificador.aproximar("Direccion 1")).thenReturn(Optional.of(new Ubicacion(-33.5, -70.7, true)));
+        optimizadorDevuelve(1);
+
+        RutaResponse ruta = service.generar(request(1L));
+
+        assertTrue(ruta.paradas().get(0).ubicacionAproximada());
+    }
+
+    @Test
     void siNoSeEncuentraUnaDireccionNoSeAsignaNada() {
         Guia sinUbicar = guiaUbicada(1);
         sinUbicar.setLatitud(null);

@@ -40,6 +40,58 @@ class NominatimClientTest {
     }
 
     @Test
+    void laComunaDeUnaDireccionConPuntoYGuionSeLeeIgual() {
+        String limpia = NominatimClient.limpiar(
+                "CARRETERA GENERAL SAN MARTIN # 16500 LOTEO LOS LIB. 15-A, COLINA - SANTIAGO");
+
+        assertEquals(Optional.of(new ConsultaEstructurada("16500 CARRETERA GENERAL SAN MARTIN", "COLINA")),
+                ConsultaEstructurada.de(limpia));
+    }
+
+    // Las direcciones de estos tests son las que bloquearon una ruta real con un 422.
+
+    @Test
+    void limpiaLoQueNominatimNoEntiende() {
+        assertEquals("CAMINO LONGITUDINAL SUR 5201, SAN BERNARDO, SANTIAGO",
+                NominatimClient.limpiar("CAMINO LONGITUDINAL SUR # 5201, SAN BERNARDO, SANTIAGO, CHILE"));
+        assertEquals("CARRETERA GENERAL SAN MARTIN 16500, COLINA, SANTIAGO",
+                NominatimClient.limpiar("CARRETERA GENERAL SAN MARTIN # 16500 LOTEO LOS LIB. 15-A, COLINA - SANTIAGO"));
+        assertEquals("Los Aromos 120, Maipú", NominatimClient.limpiar("Los Aromos N° 120, Maipú"));
+    }
+
+    @Test
+    void sacaElHorarioYElAgendamiento() {
+        assertEquals("CANAL LA PUNTA 8770, RENCA", NominatimClient.limpiar(
+                "CANAL LA PUNTA 8770, RENCA (BODEGA 51), LUNES A VIERNES DE 8.00 A 17.00, VIERNES HASTA LAS 14.00HRS"));
+        assertEquals("Bodega Consolidación Lo Aguirre KM 16 Ruta 68 1200 Santiago, Pudahel", NominatimClient.limpiar(
+                "Bodega Consolidación Lo Aguirre KM 16 Ruta 68 1200 Santiago/Pudahel Agendada para entrega "
+                        + "Bodega Consolidacion el Lunes 31 Marzo a las 14:30Hrs"));
+    }
+
+    @Test
+    void unaDireccionBienEscritaNoCambia() {
+        assertEquals("Av. Américo Vespucio 1001, Quilicura, Santiago",
+                NominatimClient.limpiar("Av. Américo Vespucio 1001, Quilicura, Santiago"));
+        assertEquals("San Nicolás 630-B, San Miguel", NominatimClient.limpiar("San Nicolás 630-B, San Miguel"));
+    }
+
+    @Test
+    void laComunaEsElPrimerTrozoSinNumerosQueNoEsUnCamino() {
+        assertEquals(Optional.of("SAN JOAQUIN"), NominatimClient.comuna(
+                NominatimClient.limpiar("AV. VICUÑA MACKENA 2289, SAN JOAQUIN, SANTIAGO, CHILE")));
+        assertEquals(Optional.of("SAN FRANCISCO MOSTAZAL"), NominatimClient.comuna(NominatimClient.limpiar(
+                "Bodega Planta, SITE CPP (Promedio) KM. 63 LONGITUDINAL SUR - SAN FRANCISCO MOSTAZAL")));
+        assertEquals(Optional.of("RENGO"), NominatimClient.comuna(
+                NominatimClient.limpiar("RUTA H-50 KM 0,2 - CAMINO QUINTA DE TILCOCO - RENGO")));
+    }
+
+    @Test
+    void sinTrozoDespuesDeLaCalleNoHayComuna() {
+        assertTrue(NominatimClient.comuna("Av. Providencia 1208").isEmpty());
+        assertTrue(NominatimClient.comuna("Ruta 68 KM 16, Camino a Valparaíso").isEmpty());
+    }
+
+    @Test
     void unaDireccionConNumeroEsExacta() {
         String json = """
                 [{"lat": "-33.4584718", "lon": "-70.6319705", "place_rank": 30, "addresstype": "place"}]

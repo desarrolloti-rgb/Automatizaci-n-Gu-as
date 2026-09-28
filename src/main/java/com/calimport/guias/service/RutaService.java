@@ -144,6 +144,9 @@ public class RutaService {
             Optional<Ubicacion> ubicacion;
             try {
                 ubicacion = geocodificador.geocodificar(guia.getDireccion());
+                if (ubicacion.isEmpty()) {
+                    ubicacion = geocodificador.aproximar(guia.getDireccion());
+                }
             } catch (RuntimeException e) {
                 log.error("Error geocodificando la guia {}: {}", guia.getId(), e.getMessage(), e);
                 throw new ApiException(HttpStatus.BAD_GATEWAY, "Error consultando el mapa para ubicar las direcciones");
@@ -158,7 +161,7 @@ public class RutaService {
         if (!sinUbicar.isEmpty()) {
             throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
                     "No se encontró en el mapa la dirección de las guías folio " + String.join(", ", sinUbicar)
-                            + ". Corregirla en SAP y volver a sincronizar.");
+                            + ", ni siquiera su comuna. Corregirla en la columna Dirección de la pestaña Guías.");
         }
         return ubicadas;
     }

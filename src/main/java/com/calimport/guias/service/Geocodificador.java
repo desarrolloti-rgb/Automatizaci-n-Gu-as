@@ -19,4 +19,14 @@ public interface Geocodificador {
 
     /** Vacío si no se encuentra la dirección. Un error del servicio es una excepción, no un vacío. */
     Optional<Ubicacion> geocodificar(String direccion);
+
+    /**
+     * Último recurso cuando {@link #geocodificar} no encontró nada: una ubicación gruesa (la
+     * comuna), siempre aproximada, para que una dirección mal escrita no bloquee la ruta
+     * entera. Va aparte y no dentro de {@code geocodificar} para que {@code cascada} pruebe
+     * Google antes de conformarse con la comuna. Vacío si no hay ni eso.
+     */
+    default Optional<Ubicacion> aproximar(String direccion) {
+        return Optional.empty();
+    }
 }

@@ -20,6 +20,7 @@ class GeocodificadorEnCascadaTest {
         private final Optional<Ubicacion> respuesta;
         private final RuntimeException error;
         private int llamadas;
+        private int aproximaciones;
 
         Falso(Optional<Ubicacion> respuesta) {
             this(respuesta, null);
@@ -38,6 +39,24 @@ class GeocodificadorEnCascadaTest {
             }
             return respuesta;
         }
+
+        @Override
+        public Optional<Ubicacion> aproximar(String direccion) {
+            aproximaciones++;
+            return Optional.of(APROXIMADA);
+        }
+    }
+
+    @Test
+    void laComunaLaDaOpenStreetMapNoGoogle() {
+        Falso osm = new Falso(Optional.empty());
+        Falso google = new Falso(Optional.empty());
+
+        assertEquals(Optional.of(APROXIMADA),
+                new GeocodificadorEnCascada(osm, google).aproximar("DOMINGO ARTEGA 276, MACUL"));
+
+        assertEquals(1, osm.aproximaciones);
+        assertEquals(0, google.aproximaciones);
     }
 
     @Test

@@ -217,7 +217,7 @@ Cada paso es una interfaz con dos implementaciones, elegidas con `@ConditionalOn
 
 | Paso | Gratis (defecto) | Google (pagado) |
 |---|---|---|
-| `Geocodificador` | `osm/NominatimClient`: OpenStreetMap, busca "número calle" + comuna y si no, texto libre | `google/GeocodingClient` |
+| `Geocodificador` | `osm/NominatimClient`: OpenStreetMap, limpia la dirección, busca "número calle" + comuna y si no, texto libre; `aproximar` cae a la comuna | `google/GeocodingClient` |
 | ↳ mezcla | `GeocodificadorEnCascada` (`rutas.geocodificador=cascada`): OSM y, **solo si no encuentra nada**, Google | |
 | `InterpreteComentarios` | `InterpreteReglas`: patrones ("de 9 a 13", "hasta las 12", "solo en la mañana"…); no arma nota | `InterpreteGemini` |
 | `OptimizadorRutas` | `OptimizadorLocal`: línea recta × 1,35 a `velocidad-promedio-kmh`, mismos costos que Google, vecino más conveniente + búsqueda local | `OptimizadorGoogle` |
@@ -232,10 +232,16 @@ Límites de lo gratuito, a tener presentes:
   ("AV. VICUÑA MACKENA" por Mackenna, "DOMINGO ARTEGA" por Arteaga) — escritas bien las
   ubica exacto, con el typo no las ubica nunca; las otras tres existen pero escritas como
   las escribe un vendedor ("Bodega Planta, SITE CPP (Promedio) KM. 63 LONGITUDINAL SUR")
-  y solo aparecen si se les limpia el texto a mano. Limpiar con reglas tapa algunos casos y
-  **ningún typo**: para eso está `cascada`. Una dirección que no se ubica **bloquea la ruta
-  completa** con un 422 que nombra los folios; bodega la arregla en SAP y vuelve a
-  sincronizar, o la corrige a mano con `PATCH /api/guias/{id}/direccion`.
+  y solo aparecen si se les limpia el texto. `NominatimClient.limpiar` quita agendamiento,
+  horario, paréntesis, `#`/`N°`, lo que sigue al número ("LOTEO…", "BODEGA…") y "Chile";
+  eso tapa algunos casos y **ningún typo**. Si ni así aparece, `Geocodificador.aproximar`
+  la ubica **en su comuna** (el primer trozo tras la calle sin números que no empiece como
+  camino) y la guía entra a la ruta como `ubicacionAproximada`: un typo o un "KM 63" rural
+  ya no bloquea la ruta. Va aparte de `geocodificar` para que `cascada` pruebe Google antes
+  de conformarse con la comuna. Solo si tampoco hay comuna, **bloquea la ruta completa** con
+  un 422 que nombra los folios; bodega la corrige en la columna Dirección
+  (`PATCH /api/guias/{id}/direccion`) o en SAP y vuelve a sincronizar. Una guía sin ubicar
+  hace hasta 3 consultas (≈ 3,3 s).
 - **`OptimizadorLocal`** no conoce calles ni tráfico: las horas de llegada son estimadas.
 - **`InterpreteReglas`** solo lee lo que calza con sus patrones; lo demás lo corrige bodega
   con `PATCH /api/guias/{id}/horario`. Descarta a propósito las horas precedidas por "no

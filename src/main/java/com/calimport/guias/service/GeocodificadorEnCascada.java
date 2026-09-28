@@ -36,7 +36,8 @@ import com.calimport.guias.osm.NominatimClient;
  * <p><b>Google solo entra cuando OSM devuelve vacío</b>, no cuando devuelve una ubicación
  * aproximada. Una aproximada ya sirve —la guía entra a la ruta y queda marcada para que el
  * repartidor confirme— y la mayoría de las direcciones caen ahí: cobrarlas todas sería
- * pagar por lo que ya estaba resuelto. Lo que se paga es solo lo que hoy bloquea la ruta.
+ * pagar por lo que ya estaba resuelto. Lo que se paga es solo lo que sin Google quedaría
+ * ubicado apenas en su comuna ({@link #aproximar}, que sigue siendo de OSM).
  *
  * <p>Si Google falla (falta la API key, se acabó la cuota), <b>no se propaga</b>: se
  * registra y se devuelve lo que dijo OSM. Perder el respaldo pagado no puede dejar sin ruta
@@ -85,5 +86,11 @@ public class GeocodificadorEnCascada implements Geocodificador {
                     direccion, e.getMessage());
             return Optional.empty();
         }
+    }
+
+    /** La comuna la da OSM gratis: llega acá solo si ni OSM ni Google ubicaron la dirección. */
+    @Override
+    public Optional<Ubicacion> aproximar(String direccion) {
+        return gratuito.aproximar(direccion);
     }
 }
