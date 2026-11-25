@@ -775,3 +775,50 @@ Para diagnosticar: `systemctl status guias` y `journalctl -u guias -n 50 -f`.
 Es el repo con mejor cobertura de los tres: hay tests de controller, service, repository
 (sobre H2) y seguridad. Al tocar `GuiaService` o `GuiaSyncService`, correr al menos
 `GuiaServiceTest` y `GuiaSyncServiceTest`.
+
+**`ArquitecturaTest` (ArchUnit) comprueba los límites entre paquetes** en cada `test`:
+
+- Un controller no depende de `repository`, `google`, `osm` ni `correo`.
+- Tampoco de `sap`, salvo para atrapar `SapUnauthorizedException`.
+- Nadie depende de `controller`, salvo de `controller.dto`.
+- `repository` y `model` no conocen las capas de arriba.
+- `sap`, `google` y `osm` no tocan ni la web ni la base.
+
+Tres controllers hablan con SAP a sabiendas y están nombrados en el test:
+
+- `DeliveryNoteController`: es la ventana de diagnóstico.
+- `AuthController` y `SesionComunController`: consultan `EmployeesInfo`. Es deuda, no un
+  modelo a copiar.
+
+Un controller nuevo que haga lo mismo hace fallar el build. Si de verdad corresponde, se
+agrega a esa lista con su porqué; no se afloja la regla.
+
+## Cómo trabajar en este repo
+
+- **Antes de editar, un plan breve y esperar el visto bueno** cuando el cambio toca un
+  contrato que lee otro lado (DTOs y endpoints que usa el frontend, roles, `@PreAuthorize`),
+  una migración de Flyway, lo que se empuja a SAP, la seguridad o la integración de Samex.
+  Lo demás se hace directo.
+- **Test primero** en lo que tiene reglas: transiciones de `EstadoGuia`, permisos (guía
+  ajena → 403), parsers (`FooterDespacho`, `InterpreteReglas`, `NominatimClient.limpiar`) y lo
+  que se manda a SAP. Normal, borde y error.
+- **Alcance mínimo**: no reordenar ni "arreglar" de pasada código que no se pidió, en especial
+  las excepciones conocidas de `ArquitecturaTest`. Los comentarios que explican una decisión
+  operativa o de seguridad no se borran: son la razón de que el código sea así.
+- **Inyección por constructor, con campos `final`.** `@Autowired` solo para una dependencia
+  opcional o condicional, como en `GeocodificadorEnCascada`.
+- **Errores esperados con `ApiException`** y el `HttpStatus` que corresponde;
+  `GlobalExceptionHandler` arma el `ProblemDetail`. Un `ProblemDetail` a mano solo si la
+  respuesta lleva algo más, como la cookie de `SesionComunController`.
+- **Entradas externas en una consulta** (OData de SAP, Nominatim, Google) se validan y se
+  escapan, igual que no van secretos ni rutas sensibles al código ni al log.
+- **Terminar con la suite completa en verde** (el comando de "Comandos", con el desvío de la
+  tilde si hace falta), no solo el test del cambio.
+
+Al revisar o auditar un cambio, reportar:
+
+1. Capas cruzadas o acoplamiento indebido.
+2. Riesgos de concurrencia o transacción: un `save` de la entidad entera donde había un
+   UPDATE parcial, o el orden Postgres → SAP.
+3. Nulos, seguridad y manejo de errores.
+4. Las pruebas que faltan para cubrir el cambio.

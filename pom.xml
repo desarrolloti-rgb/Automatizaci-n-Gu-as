@@ -139,6 +139,14 @@
 			<artifactId>h2</artifactId>
 			<scope>test</scope>
 		</dependency>
+		<!-- Reglas de capas (ArquitecturaTest): que un controller no hable con SAP ni con la
+		     base por su cuenta lo comprueba el build, no la memoria de quien edita. -->
+		<dependency>
+			<groupId>com.tngtech.archunit</groupId>
+			<artifactId>archunit-junit5</artifactId>
+			<version>1.4.1</version>
+			<scope>test</scope>
+		</dependency>
 	</dependencies>
 
 	<build>
