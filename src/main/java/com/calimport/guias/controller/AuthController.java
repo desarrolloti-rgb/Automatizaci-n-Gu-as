@@ -144,7 +144,9 @@ public class AuthController {
      * con esta misma regla (Panel-Facturadores/backend/src/auth.js): si cambia acá, cambia
      * allá. La comparación ignora mayúsculas, tildes y espacios de más.
      * <ul>
-     *   <li>JEFE_BODEGA: "Jefe Bodega" y sus variantes, incluido el typo real "Jefe bogeda".</li>
+     *   <li>JEFE_BODEGA: "Jefe Bodega" y sus variantes, incluido el typo real "Jefe bogeda".
+     *       Desde el 2026-11-25 también "Gerencia Operaciones", que ve todas las pestañas del
+     *       portal (panel y Guías) con la misma sesión común.</li>
      *   <li>Despachador: "Bodeguero"/"Bodeguera" con o sin sucursal ("Bodeguero CCP",
      *       "Bodeguera ANT"), "Despachador"/"Despachadora", "Bodega" y "Personal bodega".</li>
      * </ul>
@@ -158,7 +160,8 @@ public class AuthController {
                 .trim()
                 .replaceAll("\\s+", " ");
 
-        if (cargo.startsWith("jefe") && (cargo.contains("bodega") || cargo.contains("bogeda"))) {
+        if ((cargo.startsWith("jefe") && (cargo.contains("bodega") || cargo.contains("bogeda")))
+                || cargo.equals("gerencia operaciones")) {
             return Optional.of(Rol.JEFE_BODEGA);
         }
         if (cargo.startsWith("bodeguer") || cargo.startsWith("despachador") || cargo.equals("bodega")
