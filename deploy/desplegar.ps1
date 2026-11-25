@@ -24,18 +24,31 @@
   .\deploy\desplegar.ps1
   .\deploy\desplegar.ps1 -SoloFrontend
   .\deploy\desplegar.ps1 -SinIap        # si todavia no esta el rol iap.tunnelResourceAccessor
+  .\deploy\desplegar.ps1 -Prueba -SoloFrontend   # instancia de prueba, /gd-prueba/
 #>
 param(
   [string]$Vm = 'apps',
   [string]$Zona = 'us-east1-b',
   [switch]$SoloFrontend,
-  [switch]$SinIap
+  [switch]$SinIap,
+  [switch]$Prueba
 )
 
 $ErrorActionPreference = 'Stop'
 $raiz = Split-Path $PSScriptRoot -Parent
 $frontend = Join-Path (Split-Path $raiz -Parent) 'Frontend'
 $jar = Join-Path $raiz 'target\guias-backend-0.0.1-SNAPSHOT.jar'
+
+# -Prueba despliega la instancia de prueba (https://apps.calimport.cl/gd-prueba/, contra SAP
+# CALIMPORT_TEST): misma VM, otra carpeta, otro servicio y otro puerto. Ver "Instancia de
+# prueba" en CLAUDE.md. Sin -Prueba todo queda exactamente como antes.
+if ($Prueba) {
+  $dir = '/opt/guias-prueba'; $servicio = 'guias-prueba'; $puerto = 8082; $prefijo = '/gd-prueba/'
+  $dist = "$frontend\dist\guias-frontend-prueba\browser"
+} else {
+  $dir = '/opt/guias'; $servicio = 'guias'; $puerto = 8080; $prefijo = '/gd/'
+  $dist = "$frontend\dist\guias-frontend\browser"
+}
 
 function Paso($texto) { Write-Host "`n>>> $texto" -ForegroundColor Cyan }
 
@@ -173,11 +186,40 @@ if (-not $SoloFrontend) {
 # rutas quedarian rotas detras del prefijo.
 Paso 'Compilando el frontend (configuracion de produccion)'
 Push-Location $frontend
-Nativo { & pnpm build }
+# La de prueba es la de produccion con otro prefijo y otro environment encima; la coma va
+# entre comillas porque PowerShell la leeria como un arreglo de dos argumentos.
+if ($Prueba) { Nativo { & pnpm exec ng build '--configuration=production,prueba' } }
+else { Nativo { & pnpm build } }
 Pop-Location
 if ($LASTEXITCODE -ne 0) { throw 'Fallo el build del frontend.' }
-$base = Select-String -Path "$frontend\dist\guias-frontend\browser\index.html" -Pattern '<base href="/gd/">'
-if (-not $base) { throw 'El index no quedo con baseHref /gd/: revisar angular.json.' }
+$base = Select-String -Path "$dist\index.html" -Pattern "<base href=`"$prefijo`">"
+if (-not $base) { throw "El index no quedo con baseHref ${prefijo}: revisar angular.json." }
+
+if ($Prueba) {
+  # Que la app de prueba instalada no se llame igual que la real en el mismo celular. El
+  # manifest y el index van en ngsw.json con su SHA-1: despues de tocarlos se corrige ese
+  # hash, o el service worker descarta la version por hash distinto. Solo esos dos: el CLI
+  # ngsw-config regeneraria todo pero metiendo los propios archivos del worker en la cache.
+  # Escritos en UTF-8 sin BOM, y la tilde como [char] porque este archivo se mantiene en
+  # ASCII (PowerShell 5.1 lo lee como ANSI).
+  $utf8 = New-Object Text.UTF8Encoding $false
+  $nombre = "Gu$([char]0xED)as PRUEBA"
+  $m = "$dist\manifest.json"
+  $t = [IO.File]::ReadAllText($m) -replace '"name":\s*"[^"]*"', "`"name`": `"$nombre`"" `
+                                   -replace '"short_name":\s*"[^"]*"', '"short_name": "PRUEBA"'
+  [IO.File]::WriteAllText($m, $t, $utf8)
+  $i = "$dist\index.html"
+  $t = [IO.File]::ReadAllText($i) -replace '(name="apple-mobile-web-app-title" content=)"[^"]*"', '$1"PRUEBA"'
+  [IO.File]::WriteAllText($i, $t, $utf8)
+  $ngsw = "$dist\ngsw.json"
+  $t = [IO.File]::ReadAllText($ngsw)
+  foreach ($archivo in 'manifest.json', 'index.html') {
+    $sha = (Get-FileHash "$dist\$archivo" -Algorithm SHA1).Hash.ToLower()
+    $t = $t -replace "(`"$([regex]::Escape($prefijo + $archivo))`":\s*)`"[0-9a-f]{40}`"", "`$1`"$sha`""
+    if ($t -notmatch "`"$sha`"") { throw "No se encontro el hash de $archivo en ngsw.json." }
+  }
+  [IO.File]::WriteAllText($ngsw, $t, $utf8)
+}
 
 # --- Subida -----------------------------------------------------------------------
 
@@ -194,7 +236,7 @@ if (-not $SoloFrontend) {
 # "unable to create directory" que no dice cual. Queda como subida/browser.
 EnLaVm 'rm -rf subida; mkdir -p subida'
 if ($LASTEXITCODE -ne 0) { throw 'No se pudo preparar el directorio de subida en la VM.' }
-Nativo { & $gcloud compute scp --recurse "$frontend\dist\guias-frontend\browser" "${destino}:subida" @conexion --quiet }
+Nativo { & $gcloud compute scp --recurse $dist "${destino}:subida" @conexion --quiet }
 if ($LASTEXITCODE -ne 0) { throw 'Fallo la subida de los estaticos.' }
 
 Paso 'Instalando y reiniciando'
@@ -204,19 +246,22 @@ Paso 'Instalando y reiniciando'
 # En UNA linea y sin comillas dobles a proposito: plink no respeta los saltos de linea de
 # un --command multilinea (parte el script y ejecuta pedazos sueltos), y las comillas se
 # pierden entre PowerShell, cmd y plink antes de llegar a bash.
-$instalar = 'set -e; sudo rm -rf /opt/guias/static; sudo mv ~/subida/browser /opt/guias/static; ' +
-            'rmdir ~/subida; sudo chown -R root:root /opt/guias/static; ' +
-            'if [ -f ~/guias-backend.jar ]; then sudo systemctl stop guias; ' +
-            'sudo mv ~/guias-backend.jar /opt/guias/guias-backend.jar; ' +
-            'sudo chown root:root /opt/guias/guias-backend.jar; fi; ' +
-            'sudo systemctl restart guias; sleep 8; systemctl is-active guias'
+$instalar = "set -e; sudo rm -rf $dir/static; sudo mv ~/subida/browser $dir/static; " +
+            "rmdir ~/subida; sudo chown -R root:root $dir/static; " +
+            "if [ -f ~/guias-backend.jar ]; then sudo systemctl stop $servicio; " +
+            "sudo mv ~/guias-backend.jar $dir/guias-backend.jar; " +
+            "sudo chown root:root $dir/guias-backend.jar; fi; " +
+            "sudo systemctl restart $servicio; sleep 8; systemctl is-active $servicio"
 EnLaVm $instalar
-if ($LASTEXITCODE -ne 0) { throw 'El servicio no quedo activo. Revisar: journalctl -u guias -n 50' }
+if ($LASTEXITCODE -ne 0) { throw "El servicio no quedo activo. Revisar: journalctl -u $servicio -n 50" }
 
 Paso 'Comprobando'
 # Se espera a que responda en vez de comprobar una sola vez: en la e2-small, Flyway mas el
 # arranque de Spring tardan ~20 s y una comprobacion inmediata daba un falso negativo
 # (000) con el servicio perfectamente sano.
-EnLaVm 'for i in $(seq 1 20); do curl -s -o /dev/null http://127.0.0.1:8080/ && break; sleep 3; done; curl -s -o /dev/null -w raiz:%{http_code}\n http://127.0.0.1:8080/; curl -s -o /dev/null -w api-sin-token:%{http_code}\n http://127.0.0.1:8080/api/guias'
+$local = "http://127.0.0.1:$puerto"
+EnLaVm ('for i in $(seq 1 20); do curl -s -o /dev/null ' + $local + '/ && break; sleep 3; done; ' +
+        'curl -s -o /dev/null -w raiz:%{http_code}\n ' + $local + '/; ' +
+        'curl -s -o /dev/null -w api-sin-token:%{http_code}\n ' + $local + '/api/guias')
 Write-Host "`nDesplegado. Se espera raiz:200 api-sin-token:401" -ForegroundColor Green
-Write-Host "Desde afuera: https://apps.calimport.cl/gd/" -ForegroundColor Green
+Write-Host "Desde afuera: https://apps.calimport.cl$prefijo" -ForegroundColor Green

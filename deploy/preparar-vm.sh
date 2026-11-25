@@ -106,17 +106,29 @@ sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='$BASE'" | g
 
 echo "== Respaldo diario =="
 # La base y las fotos son la evidencia de lo que paso en terreno: si se pierden, no hay
-# forma de reconstruirlas. Catorce dias de historia, que es lo que cabe comodo en el disco.
+# forma de reconstruirlas. Catorce dias de historia local, que es lo que cabe en el disco.
 #
-# OJO: el respaldo queda en ESTA misma VM. Sirve contra un borrado accidental, no contra
-# perder la maquina. Falta copiarlo a un bucket de Cloud Storage.
+# Un respaldo en la misma VM no sirve si se pierde la maquina, asi que con RESPALDO_BUCKET
+# en el .env el dump se sube ademas a ese bucket (lo crea deploy/crear-bucket.ps1; ahi
+# vive 90 dias). Sube con la cuenta de servicio de la VM, que solo puede crear objetos.
+# Con FOTOS_ALMACEN=gcs las fotos ya estan en su bucket y no se empaquetan.
+#
+# Lee el .env en cada corrida: al agregar las variables no hay que reinstalar nada.
 cat > /usr/local/bin/respaldo-guias.sh <<'RESPALDO'
 #!/usr/bin/env bash
 set -euo pipefail
 DIA="$(date +%F)"
 DESTINO="/var/lib/guias/respaldos"
+ENV="/opt/guias/.env"
+valor() { grep -Po "^$1=\K.*" "$ENV" 2>/dev/null || true; }
 sudo -u postgres pg_dump guias | gzip > "$DESTINO/guias-$DIA.sql.gz"
-tar czf "$DESTINO/fotos-$DIA.tar.gz" -C /var/lib/guias fotos
+if [[ "$(valor FOTOS_ALMACEN)" != "gcs" ]]; then
+    tar czf "$DESTINO/fotos-$DIA.tar.gz" -C /var/lib/guias fotos
+fi
+BUCKET="$(valor RESPALDO_BUCKET)"
+if [[ -n "$BUCKET" ]]; then
+    gcloud storage cp "$DESTINO/guias-$DIA.sql.gz" "gs://$BUCKET/guias-$DIA.sql.gz"
+fi
 find "$DESTINO" -name '*.gz' -mtime +14 -delete
 RESPALDO
 chmod 755 /usr/local/bin/respaldo-guias.sh
@@ -145,7 +157,10 @@ WantedBy=timers.target
 TIMER
 
 echo "== Servicio =="
-cp "$DEPLOY_DIR/guias.service" /etc/systemd/system/guias.service
+# install y no cp: cp sobre un archivo existente conserva su dueno, y la unidad quedo
+# siendo del usuario que la subio y editable por el. Quien puede editar la unidad decide
+# con que usuario corre la app: tiene que ser de root.
+install -o root -g root -m 644 "$DEPLOY_DIR/guias.service" /etc/systemd/system/guias.service
 systemctl daemon-reload
 # enable pero NO start: todavia no existe el jar. Lo sube desplegar.ps1.
 systemctl enable guias

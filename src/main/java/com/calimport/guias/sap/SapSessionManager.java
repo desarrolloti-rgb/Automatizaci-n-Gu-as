@@ -169,6 +169,15 @@ public class SapSessionManager {
         }
     }
 
+    /**
+     * Olvida la sesión actual: la próxima llamada hace login de nuevo. Para cuando SAP
+     * rechaza con algo que no es 401 pero la sesión puede ser la causa (ver
+     * {@link SapClient#actualizarEstadoLogistico}).
+     */
+    public synchronized void descartarSesion() {
+        sessionCookie = null;
+    }
+
     private synchronized String renovarSesion(String cookieUsada) {
         if (sessionCookie != null && !sessionCookie.equals(cookieUsada)) {
             return sessionCookie;

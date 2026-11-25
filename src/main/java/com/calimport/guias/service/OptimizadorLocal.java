@@ -1,5 +1,6 @@
 package com.calimport.guias.service;
 
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.ZonedDateTime;
@@ -32,6 +33,10 @@ import com.calimport.guias.model.Guia;
  * <p><b>Búsqueda:</b> se arman dos recorridos iniciales (el vecino más conveniente en cada
  * paso, y por hora de cierre) y cada uno se mejora moviendo una parada a otra posición o
  * invirtiendo un tramo, mientras baje el costo. Con 50 guías tarda milisegundos.
+ *
+ * <p><b>Vuelta a bodega:</b> si la ruta vuelve, el tramo del último cliente a la bodega se
+ * suma al costo de cada recorrido que se evalúa, así que la búsqueda prefiere terminar cerca
+ * de la bodega. Si no vuelve, la ruta termina en el último cliente.
  */
 @Service
 @ConditionalOnProperty(prefix = "rutas", name = "optimizador", havingValue = "local", matchIfMissing = true)
@@ -51,11 +56,12 @@ public class OptimizadorLocal implements OptimizadorRutas {
     }
 
     @Override
-    public List<Visita> optimizar(LocalDate fecha, LocalTime horaSalida, List<Guia> guias) {
+    public Plan optimizar(LocalDate fecha, LocalTime horaSalida, boolean vuelveABodega, List<Guia> guias) {
+        ZonedDateTime medianoche = fecha.atStartOfDay(config.zona());
         if (guias.isEmpty()) {
-            return List.of();
+            return new Plan(List.of(), 0.0, fecha.atTime(horaSalida).atZone(config.zona()).toInstant());
         }
-        Problema problema = new Problema(guias, horaSalida);
+        Problema problema = new Problema(guias, horaSalida, vuelveABodega);
 
         Recorrido mejor = null;
         for (int[] inicial : List.of(problema.vecinoMasConveniente(), problema.porHoraDeCierre())) {
@@ -65,14 +71,17 @@ public class OptimizadorLocal implements OptimizadorRutas {
             }
         }
 
-        ZonedDateTime medianoche = fecha.atStartOfDay(config.zona());
         List<Visita> visitas = new ArrayList<>();
         for (int i = 0; i < mejor.orden().length; i++) {
             Guia guia = guias.get(mejor.orden()[i]);
-            long segundos = Math.round(mejor.inicios()[i] * 60);
-            visitas.add(new Visita(guia.getId(), medianoche.plusSeconds(segundos).toInstant()));
+            visitas.add(new Visita(guia.getId(), enElDia(medianoche, mejor.inicios()[i])));
         }
-        return visitas;
+        return new Plan(visitas, mejor.kilometros(), enElDia(medianoche, mejor.termino()));
+    }
+
+    /** Minuto del día (con decimales) → instante. */
+    private static Instant enElDia(ZonedDateTime medianoche, double minuto) {
+        return medianoche.plusSeconds(Math.round(minuto * 60)).toInstant();
     }
 
     /** Distancia sobre la superficie de la Tierra, en kilómetros. */
@@ -87,8 +96,10 @@ public class OptimizadorLocal implements OptimizadorRutas {
     /**
      * @param orden índices de las guías en el orden de visita
      * @param inicios minuto del día en que empieza cada visita (después de esperar si llegó temprano)
+     * @param kilometros del recorrido, con la vuelta a bodega si la hay
+     * @param termino minuto del día en que termina: al salir del último cliente o al llegar a bodega
      */
-    record Recorrido(int[] orden, double[] inicios, double costo) {
+    record Recorrido(int[] orden, double[] inicios, double kilometros, double termino, double costo) {
     }
 
     /** Las guías llevadas a números: minutos del día y una matriz de distancias. */
@@ -102,8 +113,10 @@ public class OptimizadorLocal implements OptimizadorRutas {
         private final Double[] cierra;
         private final double salida;
         private final double minutosPorParada;
+        private final boolean vuelveABodega;
 
-        Problema(List<Guia> guias, LocalTime horaSalida) {
+        Problema(List<Guia> guias, LocalTime horaSalida, boolean vuelveABodega) {
+            this.vuelveABodega = vuelveABodega;
             if (config.getVelocidadPromedioKmh() <= 0) {
                 throw new IllegalStateException("rutas.velocidad-promedio-kmh debe ser mayor que 0");
             }
@@ -165,11 +178,15 @@ public class OptimizadorLocal implements OptimizadorRutas {
                 t += minutosPorParada;
                 anterior = punto;
             }
-            // Sin vuelta a la bodega: la ruta termina en el último cliente, igual que con Google.
+            // Sin vuelta, la ruta termina en el último cliente; con vuelta, en la bodega.
+            if (vuelveABodega && orden.length > 0) {
+                t += minutos[anterior][0];
+                kilometros += km[anterior][0];
+            }
             double costo = (t - salida) / 60 * OptimizadorGoogle.COSTO_HORA_RUTA
                     + kilometros * OptimizadorGoogle.COSTO_KILOMETRO
                     + minutosDeAtraso / 60 * OptimizadorGoogle.COSTO_HORA_FUERA_DE_HORARIO;
-            return new Recorrido(orden, inicios, costo);
+            return new Recorrido(orden, inicios, kilometros, t, costo);
         }
 
         /** En cada paso va a la parada que menos suma al costo del recorrido hasta ahí. */

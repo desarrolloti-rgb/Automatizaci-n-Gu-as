@@ -44,16 +44,25 @@ public class SincronizacionSapService {
     private final RepartidorRepository repartidorRepository;
     private final String urlPublica;
     private final boolean udfDisponible;
+    private final boolean udfFechaEntrega;
 
+    /**
+     * @param udfFechaEntrega si existen {@code U_Dateguia} y {@code U_Horaguia}. Va aparte
+     *     de {@code udfDisponible} porque se crearon después y no están en todas las bases:
+     *     pedir un UDF que no existe hace que SAP rechace el PATCH completo, y entonces
+     *     tampoco llegarían el estado ni la foto.
+     */
     public SincronizacionSapService(SapClient sapClient, GuiaRepository guiaRepository,
                                     RepartidorRepository repartidorRepository,
                                     @Value("${guias.url-publica:}") String urlPublica,
-                                    @Value("${guias.sap.udf-estado-logistico:false}") boolean udfDisponible) {
+                                    @Value("${guias.sap.udf-estado-logistico:false}") boolean udfDisponible,
+                                    @Value("${guias.sap.udf-fecha-entrega:false}") boolean udfFechaEntrega) {
         this.sapClient = sapClient;
         this.guiaRepository = guiaRepository;
         this.repartidorRepository = repartidorRepository;
         this.urlPublica = urlPublica == null ? "" : urlPublica.trim().replaceAll("/+$", "");
         this.udfDisponible = udfDisponible;
+        this.udfFechaEntrega = udfFechaEntrega;
     }
 
     /**
@@ -115,7 +124,11 @@ public class SincronizacionSapService {
     }
 
     private Map<String, Object> cuerpoPara(Guia guia) {
-        return EstadoLogistico.cuerpoPatch(guia, nombreDespachador(guia), urlFotoPublica(guia));
+        Map<String, Object> cuerpo = EstadoLogistico.cuerpoPatch(guia, nombreDespachador(guia), urlFotoPublica(guia));
+        if (udfFechaEntrega) {
+            cuerpo.putAll(EstadoLogistico.camposFechaEntrega(guia));
+        }
+        return cuerpo;
     }
 
     private String nombreDespachador(Guia guia) {
@@ -130,16 +143,22 @@ public class SincronizacionSapService {
     }
 
     /**
-     * La foto la sirve esta misma app y su URL es relativa ({@code /api/fotos/...}). En SAP
-     * la mira alguien desde afuera, así que se le antepone el dominio público. Sin
+     * En SAP la foto la abre alguien sin sesión en la app, así que no va la ruta con token
+     * que queda en la guía ({@code /api/fotos/...}) sino la pública
+     * ({@code /api/evidencia/...}), con el dominio antepuesto. Sin
      * {@code guias.url-publica} configurada se manda la ruta relativa: sirve para rastrear
      * el archivo aunque no se pueda abrir con un clic.
      */
     private String urlFotoPublica(Guia guia) {
         String url = guia.getUrlFoto();
-        if (url == null || url.isBlank() || urlPublica.isEmpty()) {
+        if (url == null || url.isBlank()) {
             return url;
         }
-        return urlPublica + url;
+        String ruta = AlmacenamientoFotos.rutaPublica(url);
+        if (ruta == null) {
+            // No es una foto de esta app (una guía creada a mano con otra URL): va tal cual.
+            ruta = url;
+        }
+        return urlPublica + ruta;
     }
 }

@@ -13,6 +13,11 @@ Description=Despachos - guias cedibles firmadas
 # Flyway corre las migraciones al arrancar: sin Postgres arriba, no parte.
 After=network-online.target postgresql.service
 Wants=network-online.target
+# Que no reintente para siempre si el fallo es de configuracion: queda visible en
+# systemctl status en vez de ciclar en silencio. Van en [Unit], no en [Service]: ahi
+# systemd las ignora ("Unknown key") y el servicio llego a reiniciarse 16 veces seguidas.
+StartLimitBurst=5
+StartLimitIntervalSec=300
 
 [Service]
 Type=simple
@@ -34,10 +39,6 @@ ExecStart=/usr/bin/java -Xmx512m -jar /opt/guias/guias-backend.jar \
 
 Restart=always
 RestartSec=10
-# Que no reintente para siempre si el fallo es de configuracion: queda visible en
-# systemctl status en vez de ciclar en silencio.
-StartLimitBurst=5
-StartLimitIntervalSec=300
 
 StandardOutput=journal
 StandardError=journal

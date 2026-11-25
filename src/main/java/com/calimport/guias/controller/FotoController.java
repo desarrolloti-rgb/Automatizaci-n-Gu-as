@@ -66,12 +66,29 @@ public class FotoController {
     @GetMapping("/api/fotos/{nombre}")
     @PreAuthorize("isAuthenticated()")
     public ResponseEntity<byte[]> ver(@PathVariable String nombre) {
+        return responder(nombre);
+    }
+
+    /**
+     * La misma foto sin token, para el link de {@code U_UrlFoto}: quien la abre desde SAP no
+     * tiene sesión en la app. Solo responde nombres con el formato que genera la app, y el
+     * UUID hace que no se puedan recorrer. {@code SecurityConfig} la deja pasar sin token.
+     */
+    @GetMapping(AlmacenamientoFotos.PREFIJO_URL_PUBLICA + "{nombre}")
+    @PreAuthorize("permitAll()")
+    public ResponseEntity<byte[]> verPublica(@PathVariable String nombre) {
+        return responder(nombre);
+    }
+
+    private ResponseEntity<byte[]> responder(String nombre) {
         Foto foto = almacenamiento.leer(nombre)
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "No existe la foto " + nombre));
         return ResponseEntity.ok()
                 .contentType(foto.tipo())
                 // El archivo no cambia nunca (el nombre lleva un UUID): se puede cachear, pero en privado.
                 .cacheControl(CacheControl.maxAge(java.time.Duration.ofDays(30)).cachePrivate())
+                // Que un link pegado en algún lado no termine en un buscador.
+                .header("X-Robots-Tag", "noindex")
                 .body(foto.contenido());
     }
 }

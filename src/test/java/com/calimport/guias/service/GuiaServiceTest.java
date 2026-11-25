@@ -15,12 +15,14 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
 
+import com.calimport.guias.correo.CorreoDespachoService;
 import com.calimport.guias.model.EstadoGuia;
 import com.calimport.guias.model.Guia;
 import com.calimport.guias.model.OrigenDireccion;
 import com.calimport.guias.model.OrigenHorario;
 import com.calimport.guias.model.Rol;
 import com.calimport.guias.repository.GuiaRepository;
+import com.calimport.guias.repository.RutaRepository;
 import com.calimport.guias.sap.GuiaSap;
 import com.calimport.guias.security.UsuarioActual;
 import com.calimport.guias.utils.ApiException;
@@ -54,11 +56,19 @@ class GuiaServiceTest {
     @Mock
     private SincronizacionSapService sincronizacionSap;
 
+    @Mock
+    private RutaRepository rutaRepository;
+
+    /** Igual que SAP: el correo sale después y aparte, acá solo importa que se programe. */
+    @Mock
+    private CorreoDespachoService correoDespacho;
+
     private GuiaService service;
 
     @BeforeEach
     void setUp() {
-        service = new GuiaService(guiaRepository, sincronizacionSap);
+        service = new GuiaService(guiaRepository, sincronizacionSap, rutaRepository, correoDespacho,
+                List.of("SAMEX"));
     }
 
     /** Guía tal como queda recién creada: PENDIENTE, sin repartidor ni evidencia. */
@@ -604,6 +614,369 @@ class GuiaServiceTest {
         verify(guiaRepository, never()).save(any());
     }
 
+    @Test
+    void asignarAOtroUnaGuiaYaRetiradaLaVuelveAPorRetirarYAvisaASap() {
+        // Generar una ruta con una guía que otro ya había retirado.
+        Guia tomada = guiaConRepartidor();
+        tomada.setRecibidaPorRepartidor(true);
+        tomada.setFechaRecepcionRepartidor(Instant.now());
+        when(guiaRepository.findById(1L)).thenReturn(Optional.of(tomada));
+        devuelveLoQueGuarda();
+
+        Guia resultado = service.asignarRepartidor(1L, 99);
+
+        assertEquals(99, resultado.getRepartidorId());
+        assertFalse(resultado.isRecibidaPorRepartidor());
+        assertNull(resultado.getFechaRecepcionRepartidor());
+        // En SAP seguía en T con el nombre del anterior: hay que mandarle P.
+        verify(sincronizacionSap).empujar(resultado);
+    }
+
+    // --- reasignar (bodega, desde la tabla) ---
+
+    @Test
+    void reasignarANullDejaLaGuiaSinAsignarYLaSacaDeSuRuta() {
+        when(guiaRepository.findById(1L)).thenReturn(Optional.of(guiaConRepartidor()));
+        devuelveLoQueGuarda();
+
+        Guia resultado = service.reasignar(1L, null);
+
+        assertNull(resultado.getRepartidorId());
+        assertEquals(EstadoGuia.PENDIENTE, resultado.getEstado());
+        verify(rutaRepository).quitarGuiaDeRutas(1L);
+        // No estaba retirada: en SAP sigue en P, no hay nada que mandar.
+        verify(sincronizacionSap, never()).empujar(any());
+    }
+
+    @Test
+    void reasignarUnaRetiradaAOtroLaVuelveAPorRetirarYAvisaASap() {
+        Guia tomada = guiaConRepartidor();
+        tomada.setRecibidaPorRepartidor(true);
+        tomada.setFechaRecepcionRepartidor(Instant.now());
+        when(guiaRepository.findById(1L)).thenReturn(Optional.of(tomada));
+        devuelveLoQueGuarda();
+
+        Guia resultado = service.reasignar(1L, 99);
+
+        assertEquals(99, resultado.getRepartidorId());
+        assertFalse(resultado.isRecibidaPorRepartidor());
+        verify(rutaRepository).quitarGuiaDeRutas(1L);
+        verify(sincronizacionSap).empujar(resultado);
+    }
+
+    @Test
+    void reasignarAlMismoRepartidorNoHaceNada() {
+        Guia guia = guiaConRepartidor();
+        when(guiaRepository.findById(1L)).thenReturn(Optional.of(guia));
+
+        service.reasignar(1L, guia.getRepartidorId());
+
+        verify(rutaRepository, never()).quitarGuiaDeRutas(any());
+        verify(guiaRepository, never()).save(any());
+    }
+
+    @Test
+    void reasignarUnaResueltaEsConflictYNoLaSacaDeLaRuta() {
+        Guia rechazada = guiaConRepartidor();
+        rechazada.setEstado(EstadoGuia.RECHAZADA);
+        when(guiaRepository.findById(1L)).thenReturn(Optional.of(rechazada));
+
+        ApiException e = assertThrows(ApiException.class, () -> service.reasignar(1L, null));
+
+        // Una rechazada se reabre primero (reapertura); acá no se toca.
+        assertEquals(HttpStatus.CONFLICT, e.getStatus());
+        verify(rutaRepository, never()).quitarGuiaDeRutas(any());
+    }
+
+    // --- transportista externo: bodega elige "Despacho externo: SAMEX" ---
+
+    /** Como queda al marcarla: con SAMEX, sin repartidor y recibida en ese momento. */
+    private Guia guiaDeSamex() {
+        Guia guia = guiaPendiente();
+        guia.setTransportista("SAMEX");
+        guia.setRecibidaPorRepartidor(true);
+        guia.setFechaRecepcionRepartidor(Instant.parse("2026-11-23T13:00:00Z"));
+        return guia;
+    }
+
+    @Test
+    void marcarSamexLaDaPorRecibidaLeQuitaElRepartidorYAvisaASap() {
+        Guia tomada = guiaConRepartidor();
+        tomada.setRecibidaPorRepartidor(true);
+        tomada.setFechaRecepcionRepartidor(Instant.parse("2026-11-20T12:00:00Z"));
+        when(guiaRepository.findById(1L)).thenReturn(Optional.of(tomada));
+        devuelveLoQueGuarda();
+        Instant antes = Instant.now();
+
+        Guia resultado = service.definirTransportista(1L, "SAMEX");
+
+        assertEquals("SAMEX", resultado.getTransportista());
+        assertNull(resultado.getRepartidorId());
+        // Bodega se la entregó a Samex: queda recibida al marcarla, con la hora de la marca y
+        // no la del retiro del repartidor anterior.
+        assertTrue(resultado.isRecibidaPorRepartidor());
+        assertNotNull(resultado.getFechaRecepcionRepartidor());
+        assertFalse(resultado.getFechaRecepcionRepartidor().isBefore(antes));
+        assertEquals(EstadoGuia.PENDIENTE, resultado.getEstado());
+        // Si quedara en la ruta, el repartidor anterior la seguiría viendo en su recorrido.
+        verify(rutaRepository).quitarGuiaDeRutas(1L);
+        // En SAP pasa a T con SAMEX como despachador: queda pendiente de llegar allá, y si SAP
+        // no contesta, el reintento de siempre la vuelve a mandar.
+        assertFalse(resultado.isSincronizada());
+        verify(sincronizacionSap).empujar(resultado);
+    }
+
+    @Test
+    void elTransportistaQuedaEscritoComoEnLaLista() {
+        when(guiaRepository.findById(1L)).thenReturn(Optional.of(guiaPendiente()));
+        devuelveLoQueGuarda();
+
+        assertEquals("SAMEX", service.definirTransportista(1L, " samex ").getTransportista());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"CHILEXPRESS", "Calimport"})
+    void unTransportistaFueraDeLaListaEsBadRequest(String otro) {
+        ApiException e = assertThrows(ApiException.class, () -> service.definirTransportista(1L, otro));
+
+        assertEquals(HttpStatus.BAD_REQUEST, e.getStatus());
+        // Se valida antes de tocar la BD.
+        verify(guiaRepository, never()).findById(any());
+    }
+
+    @Test
+    void sinTransportistasConfiguradosNoSePuedeMarcarNinguna() {
+        GuiaService sinLista = new GuiaService(guiaRepository, sincronizacionSap, rutaRepository,
+                correoDespacho, List.of());
+
+        ApiException e = assertThrows(ApiException.class, () -> sinLista.definirTransportista(1L, "SAMEX"));
+
+        assertEquals(HttpStatus.BAD_REQUEST, e.getStatus());
+    }
+
+    @Test
+    void marcarUnaGuiaResueltaEsConflictYNoLaToca() {
+        Guia entregada = guiaPendiente();
+        entregada.setEstado(EstadoGuia.ENTREGADA);
+        when(guiaRepository.findById(1L)).thenReturn(Optional.of(entregada));
+
+        ApiException e = assertThrows(ApiException.class, () -> service.definirTransportista(1L, "SAMEX"));
+
+        assertEquals(HttpStatus.CONFLICT, e.getStatus());
+        verify(guiaRepository, never()).save(any());
+        verify(rutaRepository, never()).quitarGuiaDeRutas(any());
+    }
+
+    @Test
+    void marcarDeNuevoElMismoTransportistaNoHaceNada() {
+        when(guiaRepository.findById(1L)).thenReturn(Optional.of(guiaDeSamex()));
+
+        service.definirTransportista(1L, "SAMEX");
+
+        verify(guiaRepository, never()).save(any());
+        verify(rutaRepository, never()).quitarGuiaDeRutas(any());
+        verify(sincronizacionSap, never()).empujar(any());
+    }
+
+    @ParameterizedTest
+    @NullSource
+    @ValueSource(strings = {"", "  "})
+    void desmarcarDejaLaGuiaSinTransportistaYAvisaASap(String nada) {
+        when(guiaRepository.findById(1L)).thenReturn(Optional.of(guiaDeSamex()));
+        devuelveLoQueGuarda();
+
+        Guia resultado = service.definirTransportista(1L, nada);
+
+        assertNull(resultado.getTransportista());
+        assertNull(resultado.getRepartidorId());
+        // Vuelve a bodega, por retirar. En SAP estaba en T con SAMEX: vuelve a P y se limpia
+        // el despachador.
+        assertFalse(resultado.isRecibidaPorRepartidor());
+        assertNull(resultado.getFechaRecepcionRepartidor());
+        assertFalse(resultado.isSincronizada());
+        verify(sincronizacionSap).empujar(resultado);
+    }
+
+    @Test
+    void asignarUnRepartidorAUnaGuiaDeSamexLeQuitaElTransportistaYAvisaASap() {
+        when(guiaRepository.findById(1L)).thenReturn(Optional.of(guiaDeSamex()));
+        devuelveLoQueGuarda();
+
+        Guia resultado = service.reasignar(1L, 7);
+
+        assertNull(resultado.getTransportista());
+        assertEquals(7, resultado.getRepartidorId());
+        // La recibió Samex, no este repartidor: él todavía tiene que retirarla.
+        assertFalse(resultado.isRecibidaPorRepartidor());
+        assertNull(resultado.getFechaRecepcionRepartidor());
+        // SAP decía T con SAMEX; ahora la lleva un repartidor que todavía no la retira: P.
+        verify(sincronizacionSap).empujar(resultado);
+    }
+
+    @Test
+    void dejarSinAsignarUnaGuiaDeSamexTambienLeQuitaElTransportista() {
+        // Una guía de Samex no tiene repartidor, así que "sin asignar" es el mismo repartidor
+        // de antes: aun así hay que quitarle SAMEX, que es lo que bodega eligió cambiar.
+        when(guiaRepository.findById(1L)).thenReturn(Optional.of(guiaDeSamex()));
+        devuelveLoQueGuarda();
+
+        Guia resultado = service.reasignar(1L, null);
+
+        assertNull(resultado.getTransportista());
+        assertFalse(resultado.isRecibidaPorRepartidor());
+        verify(sincronizacionSap).empujar(resultado);
+    }
+
+    @Test
+    void unaRutaNoSeLlevaUnaGuiaDeSamex() {
+        when(guiaRepository.findById(1L)).thenReturn(Optional.of(guiaDeSamex()));
+
+        ApiException e = assertThrows(ApiException.class, () -> service.asignarRepartidor(1L, 7));
+
+        // Lo decidió bodega: generar una ruta no lo puede deshacer por el costado.
+        assertEquals(HttpStatus.CONFLICT, e.getStatus());
+        verify(guiaRepository, never()).save(any());
+    }
+
+    @Test
+    void elTransportistaEntregaLaGuiaConSuHoraYSuPdfSinCorreoAlCliente() {
+        Guia guia = guiaDeSamex();
+        when(guiaRepository.findById(1L)).thenReturn(Optional.of(guia));
+        devuelveLoQueGuarda();
+        Instant entregaSamex = Instant.parse("2026-11-23T13:03:56Z");
+
+        Guia resultado = service.entregarPorTransportista(1L, "SAMEX", "/api/fotos/guia-1-abc.pdf", "hash", entregaSamex);
+
+        assertEquals(EstadoGuia.ENTREGADA, resultado.getEstado());
+        // La hora es la de Samex, no la de cuando se enteró la app.
+        assertEquals(entregaSamex, resultado.getFechaEntrega());
+        assertEquals("/api/fotos/guia-1-abc.pdf", resultado.getUrlFoto());
+        assertEquals("hash", resultado.getHashFoto());
+        // El correo al cliente no corre para Samex (decisión del usuario): queda en null.
+        assertNull(resultado.getCorreoEstado());
+        verify(correoDespacho, never()).programar(any());
+        verify(sincronizacionSap).empujar(resultado);
+    }
+
+    @Test
+    void unaGuiaResueltaNoLaEntregaElTransportista() {
+        Guia rechazada = guiaDeSamex();
+        rechazada.setEstado(EstadoGuia.RECHAZADA);
+        when(guiaRepository.findById(1L)).thenReturn(Optional.of(rechazada));
+
+        ApiException e = assertThrows(ApiException.class, () -> service.entregarPorTransportista(
+                1L, "SAMEX", "/api/fotos/guia-1-abc.pdf", "hash", Instant.now()));
+
+        assertEquals(HttpStatus.CONFLICT, e.getStatus());
+        verify(guiaRepository, never()).save(any());
+    }
+
+    @Test
+    void unaGuiaQueYaNoVaPorEseTransportistaNoSeCierra() {
+        // Bodega se la pasó a un repartidor entre la búsqueda y la llegada del PDF.
+        when(guiaRepository.findById(1L)).thenReturn(Optional.of(guiaConRepartidor()));
+
+        ApiException e = assertThrows(ApiException.class, () -> service.entregarPorTransportista(
+                1L, "SAMEX", "/api/fotos/guia-1-abc.pdf", "hash", Instant.now()));
+
+        assertEquals(HttpStatus.CONFLICT, e.getStatus());
+        verify(guiaRepository, never()).save(any());
+    }
+
+    @Test
+    void sincronizarAnotaElTransportistaQueDiceElPieComoPista() {
+        when(guiaRepository.findByDocEntry(DOC_ENTRY)).thenReturn(Optional.empty());
+        devuelveLoQueGuarda();
+        String pie = "DESPACHAR A: Dirección: AV. SAN IGNACIO 1200, Comuna: Quilicura, CONTACTO: JUAN, TRANSPORTE: SAMEX";
+
+        Guia guia = service.sincronizarDesdeSap(new GuiaSap(DOC_ENTRY, FOLIO, "Cliente X", "AV. SAN IGNACIO 1200",
+                OrigenDireccion.FOOTER, null, pie, "AV. SAN IGNACIO 1200, Quilicura", ""));
+
+        // Es lo que leyó el parser: una pista para bodega, que no marca la guía.
+        assertEquals("SAMEX", guia.getTransportistaFooter());
+        assertNull(guia.getTransportista());
+    }
+
+    @Test
+    void unPieSinTransportistaDejaLaPistaVacia() {
+        when(guiaRepository.findByDocEntry(DOC_ENTRY)).thenReturn(Optional.empty());
+        devuelveLoQueGuarda();
+
+        Guia guia = service.sincronizarDesdeSap(deSap(FOLIO, "Cliente X", "Av. Siempre Viva 742", null));
+
+        assertNull(guia.getTransportistaFooter());
+    }
+
+    // --- U_Despachador de SAP: la guía que se crea con SAMEX ya llega marcada ---
+
+    private static GuiaSap deSapConDespachador(String despachador) {
+        return new GuiaSap(DOC_ENTRY, FOLIO, "Cliente X", "Av. Siempre Viva 742", OrigenDireccion.LOGISTICA,
+                null, "", "", "", null, despachador);
+    }
+
+    @Test
+    void unaGuiaCreadaEnSapConDespachadorSamexLlegaMarcadaRecibidaYAvisaASap() {
+        when(guiaRepository.findByDocEntry(DOC_ENTRY)).thenReturn(Optional.empty());
+        devuelveLoQueGuarda();
+        Instant antes = Instant.now();
+
+        Guia guia = service.sincronizarDesdeSap(deSapConDespachador(" samex "));
+
+        // Con el nombre de la lista, no como lo escribieron en SAP.
+        assertEquals("SAMEX", guia.getTransportista());
+        assertTrue(guia.isRecibidaPorRepartidor());
+        assertFalse(guia.getFechaRecepcionRepartidor().isBefore(antes));
+        assertNull(guia.getRepartidorId());
+        // En SAP estaba en P con SAMEX: pasa a T. Si SAP no contesta, el reintento de siempre.
+        assertFalse(guia.isSincronizada());
+        verify(sincronizacionSap).empujar(guia);
+    }
+
+    @Test
+    void unDespachadorQueNoEsUnTransportistaNoMarcaNada() {
+        when(guiaRepository.findByDocEntry(DOC_ENTRY)).thenReturn(Optional.empty());
+        devuelveLoQueGuarda();
+
+        Guia guia = service.sincronizarDesdeSap(deSapConDespachador("Despachador 1"));
+
+        assertNull(guia.getTransportista());
+        assertFalse(guia.isRecibidaPorRepartidor());
+        verify(sincronizacionSap, never()).empujar(any());
+    }
+
+    @Test
+    void siBodegaYaLeAsignoUnRepartidorEnLaAppSapNoSeLaQuita() {
+        when(guiaRepository.findByDocEntry(DOC_ENTRY)).thenReturn(Optional.of(guiaConRepartidor()));
+        devuelveLoQueGuarda();
+
+        Guia guia = service.sincronizarDesdeSap(deSapConDespachador("SAMEX"));
+
+        assertNull(guia.getTransportista());
+        assertEquals(7, guia.getRepartidorId());
+        verify(sincronizacionSap, never()).empujar(any());
+    }
+
+    @Test
+    void unaGuiaYaMarcadaNoSeVuelveAAvisarASapEnCadaSincronizacion() {
+        when(guiaRepository.findByDocEntry(DOC_ENTRY)).thenReturn(Optional.of(guiaDeSamex()));
+        devuelveLoQueGuarda();
+
+        service.sincronizarDesdeSap(deSapConDespachador("SAMEX"));
+
+        verify(sincronizacionSap, never()).empujar(any());
+    }
+
+    @Test
+    void sincronizarNoCambiaElTransportista() {
+        when(guiaRepository.findByDocEntry(DOC_ENTRY)).thenReturn(Optional.of(guiaDeSamex()));
+        devuelveLoQueGuarda();
+
+        Guia resultado = service.sincronizarDesdeSap(deSap(FOLIO, "Cliente X", "Av. Siempre Viva 742", null));
+
+        // Es un dato de la app, como el repartidor: SAP no lo trae ni lo puede pisar.
+        assertEquals("SAMEX", resultado.getTransportista());
+    }
+
     // --- marcarRecibidaPorRepartidor ---
 
     @Test
@@ -724,6 +1097,39 @@ class GuiaServiceTest {
         verify(guiaRepository, never()).save(any());
     }
 
+    @Test
+    void entregarDejaProgramadoElCorreoAlCliente() {
+        Guia guia = guiaConRepartidor();
+        when(guiaRepository.findById(1L)).thenReturn(Optional.of(guia));
+        devuelveLoQueGuarda();
+
+        service.entregar(1L, 7, "https://fotos/guia-1.jpg", "abc123hash");
+
+        // Se programa y no se envía acá: el repartidor no espera a SAP ni al servidor de correo.
+        verify(correoDespacho).programar(guia);
+    }
+
+    @Test
+    void unaEntregaQueNoProcedeNoProgramaCorreo() {
+        Guia entregada = guiaConRepartidor();
+        entregada.setEstado(EstadoGuia.ENTREGADA);
+        when(guiaRepository.findById(1L)).thenReturn(Optional.of(entregada));
+
+        assertThrows(ApiException.class, () -> service.entregar(1L, 7, "https://fotos/otra.jpg", "otrohash"));
+
+        verify(correoDespacho, never()).programar(any());
+    }
+
+    @Test
+    void rechazarNoProgramaCorreo() {
+        when(guiaRepository.findById(1L)).thenReturn(Optional.of(guiaConRepartidor()));
+        devuelveLoQueGuarda();
+
+        service.rechazar(1L, 7, "El cliente no tenía espacio en bodega");
+
+        verify(correoDespacho, never()).programar(any());
+    }
+
     // --- rechazar ---
 
     @Test
@@ -836,6 +1242,8 @@ class GuiaServiceTest {
         assertFalse(resultado.isRecibidaPorRepartidor());
         assertNull(resultado.getFechaRecepcionRepartidor());
         verify(sincronizacionSap).empujar(resultado);
+        // Tampoco puede seguir en la ruta de quien la rechazó.
+        verify(rutaRepository).quitarGuiaDeRutas(1L);
     }
 
     @Test

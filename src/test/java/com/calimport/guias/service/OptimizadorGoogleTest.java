@@ -58,7 +58,7 @@ class OptimizadorGoogleTest {
     @Test
     @SuppressWarnings("unchecked")
     void laConsultaSaleDeLaBodegaALaHoraIndicadaConHorarioDeChile() {
-        Map<String, Object> consulta = optimizador.construirConsulta(FECHA, SALIDA, List.of(guia(1)));
+        Map<String, Object> consulta = optimizador.construirConsulta(FECHA, SALIDA, false,List.of(guia(1)));
 
         Map<String, Object> model = (Map<String, Object>) consulta.get("model");
         assertEquals("2026-09-15T09:30:00-03:00", model.get("globalStartTime"));
@@ -71,7 +71,7 @@ class OptimizadorGoogleTest {
     @Test
     @SuppressWarnings("unchecked")
     void cadaGuiaVaEtiquetadaConSuIdYSinPenalidadParaQueSeaObligatoria() {
-        Map<String, Object> consulta = optimizador.construirConsulta(FECHA, SALIDA, List.of(guia(42)));
+        Map<String, Object> consulta = optimizador.construirConsulta(FECHA, SALIDA, false,List.of(guia(42)));
 
         Map<String, Object> model = (Map<String, Object>) consulta.get("model");
         Map<String, Object> shipment = ((List<Map<String, Object>>) model.get("shipments")).get(0);
@@ -88,7 +88,7 @@ class OptimizadorGoogleTest {
         guia.setVentanaHasta(LocalTime.of(13, 0));
 
         Map<String, Object> ventana = ((List<Map<String, Object>>) entregaDe(
-                optimizador.construirConsulta(FECHA, SALIDA, List.of(guia)), 0).get("timeWindows")).get(0);
+                optimizador.construirConsulta(FECHA, SALIDA, false,List.of(guia)), 0).get("timeWindows")).get(0);
 
         assertEquals("2026-09-15T10:00:00-03:00", ventana.get("softStartTime"));
         assertEquals("2026-09-15T13:00:00-03:00", ventana.get("softEndTime"));
@@ -98,7 +98,7 @@ class OptimizadorGoogleTest {
 
     @Test
     void unaGuiaSinHorarioNoLlevaVentana() {
-        assertFalse(entregaDe(optimizador.construirConsulta(FECHA, SALIDA, List.of(guia(1))), 0)
+        assertFalse(entregaDe(optimizador.construirConsulta(FECHA, SALIDA, false,List.of(guia(1))), 0)
                 .containsKey("timeWindows"));
     }
 
@@ -110,7 +110,7 @@ class OptimizadorGoogleTest {
         guia.setVentanaHasta(LocalTime.of(12, 0));
 
         Map<String, Object> ventana = ((List<Map<String, Object>>) entregaDe(
-                optimizador.construirConsulta(FECHA, SALIDA, List.of(guia)), 0).get("timeWindows")).get(0);
+                optimizador.construirConsulta(FECHA, SALIDA, false,List.of(guia)), 0).get("timeWindows")).get(0);
 
         assertFalse(ventana.containsKey("softStartTime"));
         assertTrue(ventana.containsKey("softEndTime"));
@@ -122,7 +122,7 @@ class OptimizadorGoogleTest {
         Guia guia = guia(1);
         guia.setVentanaHasta(LocalTime.of(9, 0));
 
-        assertFalse(entregaDe(optimizador.construirConsulta(FECHA, SALIDA, List.of(guia)), 0)
+        assertFalse(entregaDe(optimizador.construirConsulta(FECHA, SALIDA, false,List.of(guia)), 0)
                 .containsKey("timeWindows"));
     }
 
@@ -136,11 +136,53 @@ class OptimizadorGoogleTest {
                 ]}]}
                 """;
 
-        List<Visita> visitas = optimizador.leerRespuesta(mapper.readTree(json), 2);
+        List<Visita> visitas = optimizador.leerRespuesta(mapper.readTree(json), 2).visitas();
 
         assertEquals(List.of(
                 new Visita(7L, Instant.parse("2026-09-15T13:05:00Z")),
                 new Visita(3L, Instant.parse("2026-09-15T13:40:12.5Z"))), visitas);
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void conVueltaLaBodegaEsTambienElPuntoDeTermino() {
+        Map<String, Object> sinVuelta = optimizador.construirConsulta(FECHA, SALIDA, false, List.of(guia(1)));
+        Map<String, Object> conVuelta = optimizador.construirConsulta(FECHA, SALIDA, true, List.of(guia(1)));
+
+        Map<String, Object> vehiculoSin = ((List<Map<String, Object>>) ((Map<String, Object>) sinVuelta.get("model")).get("vehicles")).get(0);
+        Map<String, Object> vehiculoCon = ((List<Map<String, Object>>) ((Map<String, Object>) conVuelta.get("model")).get("vehicles")).get(0);
+        assertFalse(vehiculoSin.containsKey("endLocation"));
+        assertEquals(Map.of("latitude", -33.40, "longitude", -70.60), vehiculoCon.get("endLocation"));
+    }
+
+    @Test
+    void delRecorridoSeLeenLosKmYElTermino() {
+        String json = """
+                {"routes": [{
+                    "vehicleStartTime": "2026-09-15T12:30:00Z",
+                    "vehicleEndTime": "2026-09-15T15:12:30Z",
+                    "visits": [{"shipmentLabel": "7", "startTime": "2026-09-15T13:05:00Z"}],
+                    "metrics": {"travelDistanceMeters": 23456.7, "totalDuration": "9750s"}
+                }]}
+                """;
+
+        OptimizadorRutas.Plan plan = optimizador.leerRespuesta(mapper.readTree(json), 1);
+
+        assertEquals(23.4567, plan.kilometros(), 0.0001);
+        assertEquals(Instant.parse("2026-09-15T15:12:30Z"), plan.termino());
+    }
+
+    @Test
+    void sinMetricasElPlanQuedaSinKmNiTerminoPeroLaRutaSirve() {
+        String json = """
+                {"routes": [{"visits": [{"shipmentLabel": "7", "startTime": "2026-09-15T13:05:00Z"}]}]}
+                """;
+
+        OptimizadorRutas.Plan plan = optimizador.leerRespuesta(mapper.readTree(json), 1);
+
+        assertEquals(1, plan.visitas().size());
+        assertEquals(null, plan.kilometros());
+        assertEquals(null, plan.termino());
     }
 
     @Test

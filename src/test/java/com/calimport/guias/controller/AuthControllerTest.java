@@ -5,7 +5,10 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
@@ -15,6 +18,8 @@ import com.calimport.guias.model.Rol;
 import com.calimport.guias.sap.SapClient;
 import com.calimport.guias.sap.SapSessionManager.SapUnauthorizedException;
 import com.calimport.guias.security.JwtTokenProvider;
+import com.calimport.guias.security.LimitadorLogin;
+import com.calimport.guias.security.SesionComun;
 import com.calimport.guias.service.RepartidorService;
 import com.calimport.guias.utils.ApiException;
 
@@ -22,13 +27,20 @@ import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.ObjectNode;
 
+import java.util.List;
+import java.util.Optional;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -47,14 +59,24 @@ class AuthControllerTest {
     private JwtTokenProvider jwtTokenProvider;
 
     private PasswordEncoder passwordEncoder;
+    private SesionComun sesionComun;
     private AuthController controller;
     private ObjectMapper mapper;
+    private MockHttpServletRequest http;
+    private MockHttpServletResponse salida;
 
     @BeforeEach
     void setUp() {
         passwordEncoder = new BCryptPasswordEncoder();
-        controller = new AuthController(sapClient, repartidorService, passwordEncoder, jwtTokenProvider);
+        // 3 fallos por correo y 5 por IP, para no repetir 20 logins en cada prueba.
+        LimitadorLogin limitador = new LimitadorLogin(3, 5, 5, 15);
+        sesionComun = new SesionComun("secreto-compartido-solo-para-pruebas-0123456789", "calimport_sesion", 30, true);
+        controller = new AuthController(sapClient, repartidorService, passwordEncoder, jwtTokenProvider, limitador,
+                sesionComun);
         mapper = new ObjectMapper();
+        http = new MockHttpServletRequest();
+        http.setRemoteAddr("10.1.1.1");
+        salida = new MockHttpServletResponse();
     }
 
     /** Empleado tal como lo devuelve EmployeesInfo del Service Layer. */
@@ -64,6 +86,7 @@ class AuthControllerTest {
         empleado.put("eMail", EMAIL);
         empleado.put("FirstName", "Juan");
         empleado.put("LastName", "Perez");
+        empleado.put("JobTitle", "Bodeguero");
         empleado.put("U_Password", password);
         return empleado;
     }
@@ -86,7 +109,7 @@ class AuthControllerTest {
                 .thenReturn(respuestaCon(empleado(passwordEncoder.encode("secreta123"))));
         when(jwtTokenProvider.generateToken(EMAIL, EMPLOYEE_ID, "Juan Perez", Rol.Despachador)).thenReturn("jwt-ok");
 
-        LoginResponse respuesta = controller.login(new LoginRequest(EMAIL, "secreta123"));
+        LoginResponse respuesta = controller.login(new LoginRequest(EMAIL, "secreta123"), http, salida);
 
         assertEquals("jwt-ok", respuesta.token());
         // El login es el único momento en que se refresca la copia local desde SAP.
@@ -104,20 +127,109 @@ class AuthControllerTest {
         when(jwtTokenProvider.generateToken("jefe@calimport.cl", EMPLOYEE_ID, "Juan Perez", Rol.JEFE_BODEGA))
                 .thenReturn("jwt-jefe");
 
-        assertEquals("jwt-jefe", controller.login(new LoginRequest("jefe@calimport.cl", "pass")).token());
+        assertEquals("jwt-jefe", controller.login(new LoginRequest("jefe@calimport.cl", "pass"), http, salida).token());
         verify(repartidorService).upsertDesdeSap(EMPLOYEE_ID, "Juan Perez", "jefe@calimport.cl", true, Rol.JEFE_BODEGA);
     }
 
     @Test
-    void unJobTitleQueNoEsJefeEntraComoDespachador() {
+    void elJefeDeBodegaQuedaConLaSesionComunConElPanel() {
+        ObjectNode jefe = empleado("pass");
+        jefe.put("eMail", "jefe@calimport.cl");
+        jefe.put("JobTitle", "Jefe Bodega");
+        when(sapClient.queryEmployeeByEmail("jefe@calimport.cl")).thenReturn(respuestaCon(jefe));
+        when(jwtTokenProvider.generateToken(anyString(), anyInt(), anyString(), any())).thenReturn("jwt-jefe");
+
+        controller.login(new LoginRequest("jefe@calimport.cl", "pass"), http, salida);
+
+        String cookie = salida.getHeader(HttpHeaders.SET_COOKIE);
+        assertNotNull(cookie, "el jefe de bodega usa también el panel: entra a los dos con un solo ingreso");
+        String valor = cookie.substring("calimport_sesion=".length(), cookie.indexOf(';'));
+        SesionComun.Datos datos = sesionComun.verificar(valor).orElseThrow();
+        assertEquals("jefe@calimport.cl", datos.email());
+        assertEquals(EMPLOYEE_ID, datos.employeeId());
+        assertTrue(sesionComun.selloCoincide(datos, "pass"), "el sello es de la clave guardada en SAP");
+    }
+
+    @Test
+    void elDespachadorNoRecibeSesionComunYSeBorraLaQueHubieraDejadoElJefe() {
+        // Decisión del 2026-11-09: la sesión larga es solo para el jefe de bodega. Y si el jefe
+        // no salió en ese navegador, su cookie se borra: si no, al vencer el token del
+        // despachador, el canje lo dejaba adentro como jefe.
+        when(sapClient.queryEmployeeByEmail(EMAIL)).thenReturn(respuestaCon(empleado("pass")));
+        when(jwtTokenProvider.generateToken(EMAIL, EMPLOYEE_ID, "Juan Perez", Rol.Despachador)).thenReturn("jwt");
+
+        controller.login(new LoginRequest(EMAIL, "pass"), http, salida);
+
+        String cookie = salida.getHeader(HttpHeaders.SET_COOKIE);
+        assertNotNull(cookie);
+        assertTrue(cookie.startsWith("calimport_sesion=;") && cookie.contains("Max-Age=0") && cookie.contains("Path=/"),
+                cookie);
+    }
+
+    @Test
+    void conLaSesionComunApagadaElLoginNoTocaLaCookie() {
+        // Instancia de prueba: la cookie que ve es la de producción y no le corresponde borrarla.
+        AuthController sinSesionComun = new AuthController(sapClient, repartidorService, passwordEncoder,
+                jwtTokenProvider, new LimitadorLogin(3, 5, 5, 15), new SesionComun("", "calimport_sesion", 30, true));
+        when(sapClient.queryEmployeeByEmail(EMAIL)).thenReturn(respuestaCon(empleado("pass")));
+        when(jwtTokenProvider.generateToken(EMAIL, EMPLOYEE_ID, "Juan Perez", Rol.Despachador)).thenReturn("jwt");
+
+        sinSesionComun.login(new LoginRequest(EMAIL, "pass"), http, salida);
+
+        assertNull(salida.getHeader(HttpHeaders.SET_COOKIE));
+    }
+
+    @Test
+    void unBodegueroDeSucursalEntraComoDespachador() {
         ObjectNode despachador = empleado("pass");
-        despachador.put("JobTitle", "Chofer");
+        despachador.put("JobTitle", "Bodeguero CCP");
         when(sapClient.queryEmployeeByEmail(EMAIL)).thenReturn(respuestaCon(despachador));
         when(jwtTokenProvider.generateToken(EMAIL, EMPLOYEE_ID, "Juan Perez", Rol.Despachador))
-                .thenReturn("jwt-chofer");
+                .thenReturn("jwt-bodega");
 
-        assertEquals("jwt-chofer", controller.login(new LoginRequest(EMAIL, "pass")).token());
+        assertEquals("jwt-bodega", controller.login(new LoginRequest(EMAIL, "pass"), http, salida).token());
         verify(repartidorService).upsertDesdeSap(EMPLOYEE_ID, "Juan Perez", EMAIL, true, Rol.Despachador);
+    }
+
+    @Test
+    void unCargoQueNoEsDeBodegaNoEntraAunqueLaClaveSeaCorrecta() {
+        // Cada cargo entra a una sola app: Facturador va al Panel de Facturadores.
+        ObjectNode facturador = empleado("pass");
+        facturador.put("JobTitle", "Facturador");
+        when(sapClient.queryEmployeeByEmail(EMAIL)).thenReturn(respuestaCon(facturador));
+
+        ApiException e = assertThrows(ApiException.class, () -> controller.login(new LoginRequest(EMAIL, "pass"), http, salida));
+
+        assertEquals(HttpStatus.FORBIDDEN, e.getStatus());
+        verifyNoInteractions(repartidorService);
+        verify(jwtTokenProvider, never()).generateToken(anyString(), anyInt(), anyString(), any());
+    }
+
+    @Test
+    void unEmpleadoSinCargoNoEntra() {
+        ObjectNode sinCargo = empleado("pass");
+        sinCargo.remove("JobTitle");
+        when(sapClient.queryEmployeeByEmail(EMAIL)).thenReturn(respuestaCon(sinCargo));
+
+        ApiException e = assertThrows(ApiException.class, () -> controller.login(new LoginRequest(EMAIL, "pass"), http, salida));
+
+        assertEquals(HttpStatus.FORBIDDEN, e.getStatus());
+    }
+
+    @Test
+    void losCargosRealesDeSapSeReparten() {
+        // Cargos tal como estaban en OHEM el 2026-10-06.
+        assertEquals(Optional.of(Rol.JEFE_BODEGA), AuthController.rolDeCargo("Jefe Bodega"));
+        assertEquals(Optional.of(Rol.JEFE_BODEGA), AuthController.rolDeCargo("  jefe   bogeda "));
+        for (String bodega : List.of("Bodeguero", "Bodeguero CCP", "Bodeguera ANT", "Bodeguero PMO", "Bodega",
+                "Personal bodega", "PERSONAL BODEGA", "Despachador", "despachadora")) {
+            assertEquals(Optional.of(Rol.Despachador), AuthController.rolDeCargo(bodega), bodega);
+        }
+        for (String otro : List.of("Facturador", "Logistica", "STOCK", "Ventas Terreno", "Gerencia Operaciones",
+                "Jefe de Ventas", "Soporte TI", "")) {
+            assertEquals(Optional.empty(), AuthController.rolDeCargo(otro), otro);
+        }
+        assertEquals(Optional.empty(), AuthController.rolDeCargo(null));
     }
 
     @Test
@@ -126,7 +238,7 @@ class AuthControllerTest {
         when(sapClient.queryEmployeeByEmail(EMAIL)).thenReturn(respuestaCon(empleado("miPassword123")));
         when(jwtTokenProvider.generateToken(EMAIL, EMPLOYEE_ID, "Juan Perez", Rol.Despachador)).thenReturn("jwt-plano");
 
-        LoginResponse respuesta = controller.login(new LoginRequest(EMAIL, "miPassword123"));
+        LoginResponse respuesta = controller.login(new LoginRequest(EMAIL, "miPassword123"), http, salida);
 
         assertEquals("jwt-plano", respuesta.token());
     }
@@ -136,7 +248,7 @@ class AuthControllerTest {
         when(sapClient.queryEmployeeByEmail(EMAIL)).thenReturn(respuestaCon(empleado("pass")));
         when(jwtTokenProvider.generateToken(EMAIL, EMPLOYEE_ID, "Juan Perez", Rol.Despachador)).thenReturn("jwt");
 
-        controller.login(new LoginRequest(EMAIL, "pass"));
+        controller.login(new LoginRequest(EMAIL, "pass"), http, salida);
 
         verify(jwtTokenProvider).generateToken(EMAIL, EMPLOYEE_ID, "Juan Perez", Rol.Despachador);
     }
@@ -146,12 +258,13 @@ class AuthControllerTest {
         ObjectNode sinNombre = mapper.createObjectNode();
         sinNombre.put("EmployeeID", EMPLOYEE_ID);
         sinNombre.put("eMail", EMAIL);
+        sinNombre.put("JobTitle", "Bodeguero");
         sinNombre.put("U_Password", "pass");
 
         when(sapClient.queryEmployeeByEmail(EMAIL)).thenReturn(respuestaCon(sinNombre));
         when(jwtTokenProvider.generateToken(EMAIL, EMPLOYEE_ID, "", Rol.Despachador)).thenReturn("jwt-sin-nombre");
 
-        assertEquals("jwt-sin-nombre", controller.login(new LoginRequest(EMAIL, "pass")).token());
+        assertEquals("jwt-sin-nombre", controller.login(new LoginRequest(EMAIL, "pass"), http, salida).token());
     }
 
     // --- credenciales inválidas ---
@@ -162,7 +275,7 @@ class AuthControllerTest {
                 .thenReturn(respuestaCon(empleado(passwordEncoder.encode("la-correcta"))));
 
         ApiException e = assertThrows(ApiException.class,
-                () -> controller.login(new LoginRequest(EMAIL, "la-incorrecta")));
+                () -> controller.login(new LoginRequest(EMAIL, "la-incorrecta"), http, salida));
 
         assertEquals(HttpStatus.UNAUTHORIZED, e.getStatus());
         // Un login fallido no debe tocar la copia local ni emitir token.
@@ -175,7 +288,7 @@ class AuthControllerTest {
         when(sapClient.queryEmployeeByEmail(EMAIL)).thenReturn(respuestaCon(empleado("la-correcta")));
 
         ApiException e = assertThrows(ApiException.class,
-                () -> controller.login(new LoginRequest(EMAIL, "la-incorrecta")));
+                () -> controller.login(new LoginRequest(EMAIL, "la-incorrecta"), http, salida));
 
         assertEquals(HttpStatus.UNAUTHORIZED, e.getStatus());
     }
@@ -189,7 +302,7 @@ class AuthControllerTest {
         when(sapClient.queryEmployeeByEmail(EMAIL)).thenReturn(respuestaCon(sinPassword));
 
         ApiException e = assertThrows(ApiException.class,
-                () -> controller.login(new LoginRequest(EMAIL, "cualquiera")));
+                () -> controller.login(new LoginRequest(EMAIL, "cualquiera"), http, salida));
 
         assertEquals(HttpStatus.UNAUTHORIZED, e.getStatus());
     }
@@ -198,7 +311,7 @@ class AuthControllerTest {
     void passwordVaciaEnSapNoHabilitaEntrarConPasswordVacia() {
         when(sapClient.queryEmployeeByEmail(EMAIL)).thenReturn(respuestaCon(empleado("")));
 
-        ApiException e = assertThrows(ApiException.class, () -> controller.login(new LoginRequest(EMAIL, "")));
+        ApiException e = assertThrows(ApiException.class, () -> controller.login(new LoginRequest(EMAIL, ""), http, salida));
 
         assertEquals(HttpStatus.UNAUTHORIZED, e.getStatus());
     }
@@ -206,23 +319,92 @@ class AuthControllerTest {
     // --- usuario inexistente ---
 
     @Test
-    void emailQueNoExisteEnSapDevuelveNotFound() {
-        when(sapClient.queryEmployeeByEmail(EMAIL)).thenReturn(respuestaCon());
+    void emailQueNoExisteDaLaMismaRespuestaQueUnaClaveEquivocada() {
+        // Un 404 distinto del 401 le decía a cualquiera qué correos están cargados en SAP.
+        when(sapClient.queryEmployeeByEmail("nadie@calimport.cl")).thenReturn(respuestaCon());
+        when(sapClient.queryEmployeeByEmail(EMAIL)).thenReturn(respuestaCon(empleado("la-correcta")));
 
-        ApiException e = assertThrows(ApiException.class,
-                () -> controller.login(new LoginRequest(EMAIL, "cualquiera")));
+        ApiException inexistente = assertThrows(ApiException.class,
+                () -> controller.login(new LoginRequest("nadie@calimport.cl", "cualquiera"), http, salida));
+        ApiException claveMala = assertThrows(ApiException.class,
+                () -> controller.login(new LoginRequest(EMAIL, "cualquiera"), http, salida));
 
-        assertEquals(HttpStatus.NOT_FOUND, e.getStatus());
+        assertEquals(HttpStatus.UNAUTHORIZED, inexistente.getStatus());
+        assertEquals(claveMala.getStatus(), inexistente.getStatus());
+        assertEquals(claveMala.getMessage(), inexistente.getMessage());
+        assertEquals(AuthController.CREDENCIALES_INVALIDAS, inexistente.getMessage());
     }
 
     @Test
-    void respuestaDeSapSinArregloValueDevuelveNotFound() {
+    void respuestaDeSapSinArregloValueDevuelveUnauthorized() {
         when(sapClient.queryEmployeeByEmail(EMAIL)).thenReturn(mapper.createObjectNode());
 
         ApiException e = assertThrows(ApiException.class,
-                () -> controller.login(new LoginRequest(EMAIL, "cualquiera")));
+                () -> controller.login(new LoginRequest(EMAIL, "cualquiera"), http, salida));
 
-        assertEquals(HttpStatus.NOT_FOUND, e.getStatus());
+        assertEquals(HttpStatus.UNAUTHORIZED, e.getStatus());
+    }
+
+    // --- fuerza bruta ---
+
+    @Test
+    void trasVariosFallosElCorreoQuedaBloqueadoSinConsultarSap() {
+        when(sapClient.queryEmployeeByEmail(EMAIL)).thenReturn(respuestaCon(empleado("la-correcta")));
+
+        for (int i = 0; i < 3; i++) {
+            assertThrows(ApiException.class, () -> controller.login(new LoginRequest(EMAIL, "mala"), http, salida));
+        }
+
+        // Bloqueada, ni la clave correcta entra, y SAP ya no se consulta.
+        ApiException e = assertThrows(ApiException.class,
+                () -> controller.login(new LoginRequest(EMAIL, "la-correcta"), http, salida));
+        assertEquals(HttpStatus.TOO_MANY_REQUESTS, e.getStatus());
+        verify(sapClient, times(3)).queryEmployeeByEmail(EMAIL);
+        verifyNoInteractions(repartidorService);
+    }
+
+    @Test
+    void probarMuchosCorreosDesdeLaMismaIpTerminaBloqueado() {
+        when(sapClient.queryEmployeeByEmail(anyString())).thenReturn(respuestaCon());
+
+        for (int i = 0; i < 5; i++) {
+            String correo = "falso" + i + "@calimport.cl";
+            assertThrows(ApiException.class, () -> controller.login(new LoginRequest(correo, "x"), http, salida));
+        }
+
+        ApiException e = assertThrows(ApiException.class,
+                () -> controller.login(new LoginRequest("otro@calimport.cl", "x"), http, salida));
+        assertEquals(HttpStatus.TOO_MANY_REQUESTS, e.getStatus());
+        verify(sapClient, never()).queryEmployeeByEmail("otro@calimport.cl");
+    }
+
+    @Test
+    void unLoginCorrectoLimpiaLosFallosDelCorreo() {
+        when(sapClient.queryEmployeeByEmail(EMAIL)).thenReturn(respuestaCon(empleado("la-correcta")));
+        when(jwtTokenProvider.generateToken(EMAIL, EMPLOYEE_ID, "Juan Perez", Rol.Despachador)).thenReturn("jwt");
+
+        assertThrows(ApiException.class, () -> controller.login(new LoginRequest(EMAIL, "mala"), http, salida));
+        assertThrows(ApiException.class, () -> controller.login(new LoginRequest(EMAIL, "mala"), http, salida));
+        controller.login(new LoginRequest(EMAIL, "la-correcta"), http, salida);
+
+        // Sin la limpieza, este tercer fallo bloquearía la cuenta.
+        ApiException e = assertThrows(ApiException.class,
+                () -> controller.login(new LoginRequest(EMAIL, "mala"), http, salida));
+        assertEquals(HttpStatus.UNAUTHORIZED, e.getStatus());
+    }
+
+    @Test
+    void laIpRealSaleDeXForwardedForSoloSiLaConexionVieneDeNginx() {
+        MockHttpServletRequest desdeNginx = new MockHttpServletRequest();
+        desdeNginx.setRemoteAddr("127.0.0.1");
+        desdeNginx.addHeader("X-Forwarded-For", "1.2.3.4, 200.1.1.1");
+        assertEquals("200.1.1.1", AuthController.ipCliente(desdeNginx));
+
+        // Directo al puerto, la cabecera la escribe el cliente: se ignora.
+        MockHttpServletRequest directo = new MockHttpServletRequest();
+        directo.setRemoteAddr("10.9.9.9");
+        directo.addHeader("X-Forwarded-For", "1.2.3.4");
+        assertEquals("10.9.9.9", AuthController.ipCliente(directo));
     }
 
     // --- fallas de SAP ---
@@ -233,7 +415,7 @@ class AuthControllerTest {
                 .thenThrow(new SapUnauthorizedException("sesion expirada"));
 
         ApiException e = assertThrows(ApiException.class,
-                () -> controller.login(new LoginRequest(EMAIL, "pass")));
+                () -> controller.login(new LoginRequest(EMAIL, "pass"), http, salida));
 
         assertEquals(HttpStatus.BAD_GATEWAY, e.getStatus());
     }
@@ -243,7 +425,7 @@ class AuthControllerTest {
         when(sapClient.queryEmployeeByEmail(anyString())).thenThrow(new RuntimeException("connection timeout"));
 
         ApiException e = assertThrows(ApiException.class,
-                () -> controller.login(new LoginRequest(EMAIL, "pass")));
+                () -> controller.login(new LoginRequest(EMAIL, "pass"), http, salida));
 
         assertEquals(HttpStatus.BAD_GATEWAY, e.getStatus());
     }
@@ -258,7 +440,7 @@ class AuthControllerTest {
 
         when(sapClient.queryEmployeeByEmail(EMAIL)).thenReturn(respuestaCon(sinId));
 
-        ApiException e = assertThrows(ApiException.class, () -> controller.login(new LoginRequest(EMAIL, "pass")));
+        ApiException e = assertThrows(ApiException.class, () -> controller.login(new LoginRequest(EMAIL, "pass"), http, salida));
 
         assertEquals(HttpStatus.BAD_GATEWAY, e.getStatus());
         verify(repartidorService, never()).upsertDesdeSap(anyInt(), any(), any(), eq(true), any());

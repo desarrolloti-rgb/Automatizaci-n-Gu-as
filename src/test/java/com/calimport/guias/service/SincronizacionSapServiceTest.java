@@ -48,7 +48,7 @@ class SincronizacionSapServiceTest {
     @BeforeEach
     void setUp() {
         service = new SincronizacionSapService(sapClient, guiaRepository, repartidorRepository,
-                "https://apps.calimport.cl/gd", true);
+                "https://apps.calimport.cl/gd", true, false);
     }
 
     private Guia guiaEntregada() {
@@ -95,6 +95,48 @@ class SincronizacionSapServiceTest {
     }
 
     @Test
+    void unaGuiaDeSamexVaConSamexComoDespachadorSinBuscarRepartidor() {
+        Guia guia = new Guia(1001, 5555L, "Cliente X", "Av. Siempre Viva 742");
+        guia.setId(1L);
+        guia.setTransportista("SAMEX");
+        guia.setRecibidaPorRepartidor(true);
+        guia.setSincronizada(false);
+
+        service.empujar(guia);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> cuerpo = ArgumentCaptor.forClass(Map.class);
+        verify(sapClient).actualizarEstadoLogistico(eq(1001), cuerpo.capture());
+        assertEquals("T", cuerpo.getValue().get(EstadoLogistico.CAMPO_ESTADO));
+        assertEquals("SAMEX", cuerpo.getValue().get(EstadoLogistico.CAMPO_DESPACHADOR));
+        verify(repartidorRepository, never()).findById(any());
+        assertTrue(guia.isSincronizada());
+    }
+
+    @Test
+    void unaEntregaDeSamexVaConElLinkAlPdfYCabeEnElUdf() {
+        Guia guia = new Guia(1001, 5555L, "Cliente X", "Av. Siempre Viva 742");
+        // Un id de 6 dígitos: el caso más largo que se espera, como en el de las fotos.
+        guia.setId(123456L);
+        guia.setTransportista("SAMEX");
+        guia.setRecibidaPorRepartidor(true);
+        guia.setEstado(EstadoGuia.ENTREGADA);
+        guia.setUrlFoto("/api/fotos/guia-123456-0f8fad5b-d9cb-469f-a165-70867728950e.pdf");
+        guia.setSincronizada(false);
+
+        service.empujar(guia);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> cuerpo = ArgumentCaptor.forClass(Map.class);
+        verify(sapClient).actualizarEstadoLogistico(eq(1001), cuerpo.capture());
+        assertEquals("E", cuerpo.getValue().get(EstadoLogistico.CAMPO_ESTADO));
+        assertEquals("SAMEX", cuerpo.getValue().get(EstadoLogistico.CAMPO_DESPACHADOR));
+        String url = cuerpo.getValue().get(EstadoLogistico.CAMPO_URL_FOTO).toString();
+        assertEquals("https://apps.calimport.cl/gd/api/evidencia/guia-123456-0f8fad5b-d9cb-469f-a165-70867728950e.pdf", url);
+        assertTrue(url.length() <= 100, "U_UrlFoto mide 100: " + url.length());
+    }
+
+    @Test
     void laUrlDeLaFotoViajaAbsolutaParaQueSeAbraDesdeSap() {
         Guia guia = guiaEntregada();
         hayRepartidor();
@@ -104,9 +146,25 @@ class SincronizacionSapServiceTest {
         @SuppressWarnings("unchecked")
         ArgumentCaptor<Map<String, Object>> cuerpo = ArgumentCaptor.forClass(Map.class);
         verify(sapClient).actualizarEstadoLogistico(anyInt(), cuerpo.capture());
-        // Quien la mira desde SAP está fuera de la app: una ruta relativa no le sirve.
-        assertEquals("https://apps.calimport.cl/gd/api/fotos/guia-1-abc.jpg",
+        // Quien la mira desde SAP está fuera de la app: una ruta relativa no le sirve, y la
+        // de /api/fotos le pediría un token que no tiene.
+        assertEquals("https://apps.calimport.cl/gd/api/evidencia/guia-1-abc.jpg",
                 cuerpo.getValue().get(EstadoLogistico.CAMPO_URL_FOTO));
+    }
+
+    @Test
+    void laUrlMasLargaPosibleEntraEnElUdf() {
+        // U_UrlFoto mide 100 en productivo. Id de 6 dígitos, UUID y la extensión más larga.
+        Guia guia = guiaEntregada();
+        guia.setUrlFoto("/api/fotos/guia-999999-00000000-0000-0000-0000-000000000000.webp");
+        hayRepartidor();
+
+        service.empujar(guia);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> cuerpo = ArgumentCaptor.forClass(Map.class);
+        verify(sapClient).actualizarEstadoLogistico(anyInt(), cuerpo.capture());
+        assertTrue(cuerpo.getValue().get(EstadoLogistico.CAMPO_URL_FOTO).toString().length() <= 100);
     }
 
     @Test
@@ -197,12 +255,50 @@ class SincronizacionSapServiceTest {
         assertNull(guia.getFechaFotoEnSap());
     }
 
+    // --- fecha y hora de la entrega (U_Dateguia, U_Horaguia) ---
+
+    @Test
+    void conLosUdfDeFechaLaEntregaViajaConFechaYHora() {
+        SincronizacionSapService conFecha = new SincronizacionSapService(
+                sapClient, guiaRepository, repartidorRepository, "https://apps.calimport.cl/gd", true, true);
+        Guia guia = guiaEntregada();
+        guia.setFechaEntrega(Instant.parse("2026-11-04T19:41:21Z"));
+        hayRepartidor();
+
+        conFecha.empujar(guia);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> cuerpo = ArgumentCaptor.forClass(Map.class);
+        verify(sapClient).actualizarEstadoLogistico(eq(1001), cuerpo.capture());
+        // En el mismo PATCH que el estado y la foto, no en uno aparte.
+        assertEquals("E", cuerpo.getValue().get(EstadoLogistico.CAMPO_ESTADO));
+        assertEquals("2026-11-04", cuerpo.getValue().get(EstadoLogistico.CAMPO_FECHA_ENTREGA));
+        assertEquals("16:41:00", cuerpo.getValue().get(EstadoLogistico.CAMPO_HORA_ENTREGA));
+    }
+
+    @Test
+    void sinLosUdfDeFechaNoSeMandan() {
+        // Donde no existen (CALIMPORT_PRODUCTIVO al 05-11-2026), nombrarlos haria que SAP
+        // rechace el PATCH completo y tampoco llegarian el estado ni la foto.
+        Guia guia = guiaEntregada();
+        guia.setFechaEntrega(Instant.parse("2026-11-04T19:41:21Z"));
+        hayRepartidor();
+
+        service.empujar(guia);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> cuerpo = ArgumentCaptor.forClass(Map.class);
+        verify(sapClient).actualizarEstadoLogistico(anyInt(), cuerpo.capture());
+        assertFalse(cuerpo.getValue().containsKey(EstadoLogistico.CAMPO_FECHA_ENTREGA));
+        assertFalse(cuerpo.getValue().containsKey(EstadoLogistico.CAMPO_HORA_ENTREGA));
+    }
+
     // --- mientras los UDF no existan en SAP ---
 
     @Test
     void sinLosUdfCreadosNoSeLlamaASapYLaAppSigueFuncionando() {
         SincronizacionSapService sinUdf = new SincronizacionSapService(
-                sapClient, guiaRepository, repartidorRepository, "https://apps.calimport.cl/gd", false);
+                sapClient, guiaRepository, repartidorRepository, "https://apps.calimport.cl/gd", false, true);
         Guia guia = guiaEntregada();
 
         sinUdf.empujar(guia);

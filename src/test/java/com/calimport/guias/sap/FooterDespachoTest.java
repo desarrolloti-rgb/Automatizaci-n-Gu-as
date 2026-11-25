@@ -1,5 +1,7 @@
 package com.calimport.guias.sap;
 
+import java.util.List;
+
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -135,6 +137,28 @@ class FooterDespachoTest {
     }
 
     @Test
+    void despacharAConDireccionEsDespachoAunqueLaCalleDigaRetiro() {
+        // Folio 233 de CALIMPORT_TEST, tal cual: se saltaba como retiro en local por la calle.
+        // Regla de bodega: si dice a dónde despachar, es despacho.
+        FooterDespacho pie = FooterDespacho.de("DESPACHAR A:\rDirección: AV. EL RETIRO 1250, Comuna: Renca, "
+                + "Ciudad: Santiago, Horario de Atención: 1-2 PM, CONTACTO: BERNARDO PEREZ, FONO: 569969696");
+
+        assertFalse(pie.esRetiroEnLocal());
+        assertEquals("AV. EL RETIRO 1250, Renca, Santiago", pie.direccion());
+    }
+
+    @Test
+    void despacharAEscritoAManoConUnaCalleRetiroTambienEsDespacho() {
+        assertFalse(FooterDespacho.de("DESPACHAR A VILLA EL RETIRO 455, QUILICURA").esRetiroEnLocal());
+    }
+
+    @Test
+    void despacharASinUnaDireccionNoAlcanzaParaDescartarElRetiro() {
+        // Sin dirección que ubicar, "DESPACHAR A" no dice a dónde: manda lo que diga el resto.
+        assertTrue(FooterDespacho.de("DESPACHAR A: RETIRA EN SUCURSAL").esRetiroEnLocal());
+    }
+
+    @Test
     void unPieVacioNoEsRetiro() {
         // Si el documento no dice nada, se despacha: dejar de importar una guia por silencio
         // seria peor que importar una de mas.
@@ -210,6 +234,95 @@ class FooterDespachoTest {
 
         assertEquals("08:30 A 17:00", footer.horario());
         assertEquals("", footer.otros());
+    }
+
+    /**
+     * La plantilla de las guías nuevas (desde noviembre de 2026), con la forma exacta del
+     * DocEntry 46296 de CALIMPORT_TEST: el "DESPACHAR A:" en su línea y después todo en una
+     * sola, separado por comas. El contacto y el teléfono son inventados.
+     */
+    private static final String PLANTILLA = "DESPACHAR A:\rDirección: AV. SAN IGNACIO 1200, Comuna: Quilicura, "
+            + "Ciudad: Santiago, Horario de Atención: 09:00 - 19:00, CONTACTO: JUAN PÉREZ, FONO: 56912345678";
+
+    @Test
+    void separaLaPlantillaDeLasGuiasNuevas() {
+        FooterDespacho footer = FooterDespacho.de(PLANTILLA);
+
+        // La comuna y la ciudad vuelven a la dirección, sin sus etiquetas: es la forma
+        // "calle número, comuna, ciudad" que entiende el geocodificador.
+        assertEquals("AV. SAN IGNACIO 1200, Quilicura, Santiago", footer.direccion());
+        assertEquals("09:00 - 19:00", footer.horario());
+        assertEquals("JUAN PÉREZ", footer.contacto());
+        assertEquals("56912345678", footer.telefono());
+        assertEquals("", footer.transportista());
+        assertEquals("", footer.otros());
+        assertTrue(footer.direccionUbicable());
+    }
+
+    @Test
+    void elTransporteDeLaPlantillaEsElTransportista() {
+        // Forma del DocEntry 46293 de CALIMPORT_TEST: el transporte va al final, después
+        // del teléfono, y sin su etiqueta quedaba pegado al número.
+        FooterDespacho footer = FooterDespacho.de("DESPACHAR A:\rDirección: los manzanos 5020, Comuna: San Joaquín, "
+                + "Ciudad: Santiago, Horario de Atención: 10-11 AM, CONTACTO: ANA SOTO, FONO: 912345678, "
+                + "TRANSPORTE: SAMEX");
+
+        assertEquals("los manzanos 5020, San Joaquín, Santiago", footer.direccion());
+        assertEquals("10-11 AM", footer.horario());
+        assertEquals("912345678", footer.telefono());
+        assertEquals("SAMEX", footer.transportista());
+    }
+
+    @Test
+    void elHorarioDeAtencionNoSeLeeComoElContacto() {
+        // "Atención" sola es el contacto ("ATENCIÓN: Sr. Mora"); detrás de "Horario de" es
+        // la ventana de recepción. Partirlo ahí dejaba el horario en "de" y la hora en el
+        // contacto.
+        FooterDespacho footer = FooterDespacho.de("Horario de atención: lunes a viernes 9:00 a 17:30 hrs. "
+                + "ATENCIÓN: Sr. Mora");
+
+        assertEquals("lunes a viernes 9:00 a 17:30 hrs.", footer.horario());
+        assertEquals("Sr. Mora", footer.contacto());
+    }
+
+    @Test
+    void laComunaOLaCiudadQueYaVienenEnLaDireccionNoSeRepiten() {
+        assertEquals("CALLE UNO 123, MAIPÚ, Santiago",
+                FooterDespacho.de("Dirección: CALLE UNO 123, MAIPÚ, Comuna: Maipu, Ciudad: Santiago").direccion());
+        assertEquals("Calle Dos 456, Santiago",
+                FooterDespacho.de("Dirección: Calle Dos 456, Comuna: Santiago, Ciudad: Santiago").direccion());
+    }
+
+    @Test
+    void laPlantillaSinLlenarNoInventaNada() {
+        // Sin dirección en el pie la guía se queda con la de la ficha del cliente: los
+        // separadores de la plantilla no pueden pasar por una dirección.
+        FooterDespacho footer = FooterDespacho.de("DESPACHAR A:\rDirección: , Comuna: , Ciudad: , "
+                + "Horario de Atención:  - , CONTACTO: , FONO: ");
+
+        assertEquals("", footer.direccion());
+        assertEquals("", footer.horario());
+        assertTrue(footer.vacio());
+    }
+
+    @Test
+    void unRetiroEscritoEnElTransporteTambienEsRetiro() {
+        assertTrue(FooterDespacho.de("DESPACHAR A:\rDirección: , Comuna: , Ciudad: , Horario de Atención: , "
+                + "CONTACTO: ANA, FONO: 912345678, TRANSPORTE: RETIRA CLIENTE").esRetiroEnLocal());
+    }
+
+    @Test
+    void reconoceLasGuiasDeUnTransportistaExterno() {
+        List<String> externos = List.of("SAMEX");
+
+        // Las dos formas: el campo de la plantilla y la frase de los pies escritos a mano.
+        assertTrue(FooterDespacho.de("CONTACTO: ANA, FONO: 912345678, TRANSPORTE: SAMEX").vaPorTransportista(externos));
+        assertTrue(FooterDespacho.de("DESPACHAR VIA Samex A Calle Uno 123, Calama").vaPorTransportista(externos));
+        // Un transporte que no está en la lista no es externo: puede ser el de Calimport.
+        assertFalse(FooterDespacho.de("TRANSPORTE: CALIMPORT").vaPorTransportista(externos));
+        assertFalse(FooterDespacho.de("DESPACHAR A: CALLE UNO 123, MAIPU").vaPorTransportista(externos));
+        // Con la lista vacía no hay externos: es como se apaga el filtro.
+        assertFalse(FooterDespacho.de("TRANSPORTE: SAMEX").vaPorTransportista(List.of()));
     }
 
     @Test

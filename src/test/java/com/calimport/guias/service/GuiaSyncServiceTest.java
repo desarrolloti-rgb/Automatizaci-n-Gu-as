@@ -1,6 +1,7 @@
 package com.calimport.guias.service;
 
 import java.time.LocalDate;
+import java.util.List;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -40,7 +41,7 @@ class GuiaSyncServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new GuiaSyncService(sapClient, guiaService, "", false);
+        service = new GuiaSyncService(sapClient, guiaService, "", false, List.of("SAMEX"));
         mapper = new ObjectMapper();
     }
 
@@ -81,6 +82,32 @@ class GuiaSyncServiceTest {
         ObjectNode fila = fila(1, 187350L, "CORESA S.A.", "SAN NICOLAS 630");
         fila.put("DocNum", 9900001);
         when(sapClient.fetchGuiasDeDespacho(DESDE, null, "", false)).thenReturn(respuestaCon(fila));
+
+        service.sincronizarDesde(DESDE);
+
+        verify(guiaService).sincronizarDesdeSap(sap(1, 187350L, "CORESA S.A.", "SAN NICOLAS 630", ""));
+    }
+
+    @Test
+    void elDespachadorQueDiceSapViajaAlServicio() {
+        // Caso real (folio 234 de TEST): al crear la guía en SAP se puede dejar U_Despachador = SAMEX.
+        ObjectNode fila = fila(46299, 234L, "PRUEBA", "Dirección");
+        fila.put("U_Despachador", "SAMEX");
+        when(sapClient.fetchGuiasDeDespacho(DESDE, null, "", false)).thenReturn(respuestaCon(fila));
+
+        service.sincronizarDesde(DESDE);
+
+        org.mockito.ArgumentCaptor<GuiaSap> enviada = org.mockito.ArgumentCaptor.forClass(GuiaSap.class);
+        verify(guiaService).sincronizarDesdeSap(enviada.capture());
+        assertEquals("SAMEX", enviada.getValue().despachador());
+    }
+
+    @Test
+    void sinDespachadorLaGuiaLlegaConElCampoNulo() {
+        // Lo mismo que antes: las filas sin U_Despachador (o con el campo vacío) no cambian nada.
+        ObjectNode vacio = fila(1, 187350L, "CORESA S.A.", "SAN NICOLAS 630");
+        vacio.put("U_Despachador", "  ");
+        when(sapClient.fetchGuiasDeDespacho(DESDE, null, "", false)).thenReturn(respuestaCon(vacio));
 
         service.sincronizarDesde(DESDE);
 
@@ -234,6 +261,21 @@ class GuiaSyncServiceTest {
     }
 
     @Test
+    void unaGuiaALaCalleElRetiroSeImporta() {
+        // Folio 233 de CALIMPORT_TEST: "Av. El Retiro" la hacía pasar por retiro en local.
+        ObjectNode guia = fila(46298, 233L, "PRUEBA", "");
+        guia.put("ClosingRemarks", "DESPACHAR A:\rDirección: AV. EL RETIRO 1250, Comuna: Renca, Ciudad: Santiago, "
+                + "Horario de Atención: 1-2 PM, CONTACTO: BERNARDO PEREZ, FONO: 569969696");
+        when(sapClient.fetchGuiasDeDespacho(DESDE, null, "", false)).thenReturn(respuestaCon(guia));
+
+        GuiaSyncService.Resultado resultado = service.sincronizarDesde(DESDE);
+
+        assertEquals(1, resultado.sincronizadas());
+        assertEquals(0, resultado.retirosEnLocal());
+        verify(guiaService).sincronizarDesdeSap(argThat(g -> g != null && g.folio() == 233L));
+    }
+
+    @Test
     void elRangoDeFechasLlegaASap() {
         LocalDate hasta = LocalDate.of(2026, 8, 31);
         when(sapClient.fetchGuiasDeDespacho(DESDE, hasta, "", false)).thenReturn(respuestaCon());
@@ -257,7 +299,7 @@ class GuiaSyncServiceTest {
     void elFiltroExtraDeConfiguracionLlegaASap() {
         // Permite acotar a las guias que despacha Calimport sin recompilar, mientras se
         // confirma cual es el criterio correcto en esta instalacion.
-        GuiaSyncService conFiltro = new GuiaSyncService(sapClient, guiaService, "U_TipoDesp eq '2'", false);
+        GuiaSyncService conFiltro = new GuiaSyncService(sapClient, guiaService, "U_TipoDesp eq '2'", false, List.of());
         when(sapClient.fetchGuiasDeDespacho(DESDE, null, "U_TipoDesp eq '2'", false)).thenReturn(respuestaCon());
 
         conFiltro.sincronizarDesde(DESDE);
@@ -297,6 +339,27 @@ class GuiaSyncServiceTest {
         verify(guiaService).sincronizarDesdeSap(new GuiaSap(1, 187350L, "CORESA S.A.", "SAN NICOLAS 630",
                 OrigenDireccion.LOGISTICA, "Dejar en bodega",
                 "HORARIO: 08:30 A 17:00", "", "08:30 A 17:00"));
+    }
+
+    @Test
+    void laFechaDelDocumentoSaleDeDocDateVengaConHoraONo() {
+        ObjectNode conHora = fila(1, 187350L, "Cliente", "SAN NICOLAS 630");
+        conHora.put("DocDate", "2026-09-23T00:00:00Z");
+        ObjectNode sinHora = fila(2, 187351L, "Cliente", "SAN NICOLAS 630");
+        sinHora.put("DocDate", "2026-09-24");
+        ObjectNode ilegible = fila(3, 187352L, "Cliente", "SAN NICOLAS 630");
+        ilegible.put("DocDate", "ayer por la tarde");
+        when(sapClient.fetchGuiasDeDespacho(DESDE, null, "", false))
+                .thenReturn(respuestaCon(conHora, sinHora, ilegible));
+
+        service.sincronizarDesde(DESDE);
+
+        verify(guiaService).sincronizarDesdeSap(argThat(g -> g.docEntry() == 1
+                && LocalDate.of(2026, 9, 23).equals(g.fechaDocumento())));
+        verify(guiaService).sincronizarDesdeSap(argThat(g -> g.docEntry() == 2
+                && LocalDate.of(2026, 9, 24).equals(g.fechaDocumento())));
+        // Una fecha ilegible no le cuesta la guía: entra igual, sin fecha.
+        verify(guiaService).sincronizarDesdeSap(argThat(g -> g.docEntry() == 3 && g.fechaDocumento() == null));
     }
 
     @Test
@@ -343,6 +406,25 @@ class GuiaSyncServiceTest {
     }
 
     @Test
+    void laPlantillaDeLasGuiasNuevasDaDireccionYHorario() {
+        // Forma del DocEntry 46296 de CALIMPORT_TEST (contacto y telefono inventados). La
+        // ficha dice otra cosa a proposito: manda el pie.
+        ObjectNode fila = fila(46296, 231L, "PRUEBA", "OTRA CALLE 999, SANTIAGO");
+        fila.put("ClosingRemarks", "DESPACHAR A:\rDirección: AV. SAN IGNACIO 1200, Comuna: Quilicura, "
+                + "Ciudad: Santiago, Horario de Atención: 09:00 - 19:00, CONTACTO: JUAN PÉREZ, FONO: 56912345678");
+        when(sapClient.fetchGuiasDeDespacho(DESDE, null, "", false)).thenReturn(respuestaCon(fila));
+
+        service.sincronizarDesde(DESDE);
+
+        verify(guiaService).sincronizarDesdeSap(new GuiaSap(46296, 231L, "PRUEBA",
+                "AV. SAN IGNACIO 1200, Quilicura, Santiago", OrigenDireccion.FOOTER, "",
+                "DESPACHAR A: Dirección: AV. SAN IGNACIO 1200, Comuna: Quilicura, Ciudad: Santiago, "
+                        + "Horario de Atención: 09:00 - 19:00, CONTACTO: JUAN PÉREZ, FONO: 56912345678",
+                "AV. SAN IGNACIO 1200, Quilicura, Santiago",
+                "09:00 - 19:00"));
+    }
+
+    @Test
     void elHorarioSeSacaSoloDeSuEtiquetaYNoDelPieEntero() {
         // Lo que se guarda como horario es la frase del "HORARIO:" y nada mas: asi no hay
         // forma de que el telefono del contacto se lea como una hora.
@@ -357,18 +439,46 @@ class GuiaSyncServiceTest {
                 "CONTACTO: JUAN CEL: +56 9 8370 8082 HORARIO: 08:30 A 17:00", "", "08:30 A 17:00"));
     }
 
+    /** Pie real: va por SAMEX a Calama, escrito a mano antes de la plantilla. */
+    private static final String PIE_SAMEX = "PAGADO (TRANSFERENCIA) DESPACHAR  VIA SAMEX A "
+            + "Condominio Verdes Campiñas 3179, Pasaje 5 casa 34, Calama. - CONTACTO: ROBERTO FERNANDEZ "
+            + "- TELEFONO: 569 5060 6296";
+
     @Test
-    void unaGuiaQueVaPorTransportistaLoAvisaAlPrincipioDelComentario() {
-        // Pie real: va por SAMEX a Calama. Si bodega no lo ve, la mete en una ruta de
-        // Santiago y el optimizador arma un viaje de 1.600 km.
+    void lasGuiasDeUnTransportistaExternoNoSeImportan() {
+        // Las lleva un despachador externo, no un repartidor de Calimport: si entran, bodega
+        // puede meter una de Calama en una ruta de Santiago. Se cuentan aparte, como los
+        // retiros, para que bodega vea cuantas quedaron fuera.
+        ObjectNode aMano = fila(1, 187350L, "Cliente", "SAN NICOLAS 630, SANTIAGO");
+        aMano.put("ClosingRemarks", PIE_SAMEX);
+        ObjectNode plantilla = fila(2, 228L, "Cliente", "LOS MANZANOS 5020, SAN JOAQUIN");
+        plantilla.put("ClosingRemarks", "DESPACHAR A:\rDirección: los manzanos 5020, Comuna: San Joaquín, "
+                + "Ciudad: Santiago, Horario de Atención: 10-11 AM, CONTACTO: ANA SOTO, FONO: 912345678, "
+                + "TRANSPORTE: SAMEX");
+        ObjectNode propia = fila(3, 187352L, "Cliente", "SAN NICOLAS 630, SANTIAGO");
+        when(sapClient.fetchGuiasDeDespacho(DESDE, null, "", false))
+                .thenReturn(respuestaCon(aMano, plantilla, propia));
+
+        GuiaSyncService.Resultado resultado = service.sincronizarDesde(DESDE);
+
+        assertEquals(1, resultado.sincronizadas());
+        assertEquals(2, resultado.porTransportistaExterno());
+        assertEquals(0, resultado.retirosEnLocal());
+        verify(guiaService).sincronizarDesdeSap(argThat(g -> g.docEntry() == 3));
+        verify(guiaService, never()).sincronizarDesdeSap(argThat(g -> g != null && g.docEntry() != 3));
+    }
+
+    @Test
+    void sinTransportistasExternosConfiguradosSeImportanTodas() {
+        // Asi se apaga el filtro el dia que las guias de SAMEX se integren a la app.
+        GuiaSyncService sinFiltro = new GuiaSyncService(sapClient, guiaService, "", false, List.of());
         ObjectNode fila = fila(1, 187350L, "Cliente", "SAN NICOLAS 630, SANTIAGO");
-        fila.put("ClosingRemarks", "PAGADO (TRANSFERENCIA) DESPACHAR  VIA SAMEX A "
-                + "Condominio Verdes Campiñas 3179, Pasaje 5 casa 34, Calama. - CONTACTO: ROBERTO FERNANDEZ "
-                + "- TELEFONO: 569 5060 6296");
+        fila.put("ClosingRemarks", PIE_SAMEX);
         when(sapClient.fetchGuiasDeDespacho(DESDE, null, "", false)).thenReturn(respuestaCon(fila));
 
-        service.sincronizarDesde(DESDE);
+        GuiaSyncService.Resultado resultado = sinFiltro.sincronizarDesde(DESDE);
 
+        assertEquals(0, resultado.porTransportistaExterno());
         verify(guiaService).sincronizarDesdeSap(new GuiaSap(1, 187350L, "Cliente",
                 "Condominio Verdes Campiñas 3179, Pasaje 5 casa 34, Calama", OrigenDireccion.FOOTER, "",
                 "PAGADO (TRANSFERENCIA) DESPACHAR  VIA SAMEX A Condominio Verdes Campiñas 3179, "

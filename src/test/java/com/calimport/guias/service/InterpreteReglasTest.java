@@ -45,6 +45,10 @@ class InterpreteReglasTest {
             // El comentario armado con el pie del documento (ClosingRemarks): el horario va
             // adelante justamente para que el teléfono de más atrás no se lea como una hora.
             "HORARIO: LUNES A VIERNES 08:30 A 17:00 HORAS. · CONTACTO: JUAN ELIAS ESCUDERO · TEL: +56 9 8370 8082 | 08:30 | 17:00",
+            // El "Horario de Atención" de la plantilla de las guías nuevas, tal como lo deja
+            // FooterDespacho.
+            "09:00 - 19:00                                       | 09:00 | 19:00",
+            "10-11 AM                                            | 10:00 | 11:00",
     })
     void leeElHorario(String comentario, String desde, String hasta) {
         Interpretacion i = interprete.interpretar(comentario);

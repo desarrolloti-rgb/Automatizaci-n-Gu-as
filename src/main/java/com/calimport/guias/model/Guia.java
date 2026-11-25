@@ -1,6 +1,7 @@
 package com.calimport.guias.model;
 
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.LocalTime;
 
 import jakarta.persistence.Column;
@@ -13,7 +14,17 @@ import jakarta.persistence.Id;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 
+import org.hibernate.annotations.DynamicUpdate;
+
+/**
+ * {@code @DynamicUpdate}: al guardar se escriben solo las columnas que cambiaron. Lo exige el
+ * correo de despacho, que lo actualiza otro proceso mientras una request puede tener la
+ * misma guía leída (bodega reintentando el envío a SAP, por ejemplo). Con el UPDATE de todas
+ * las columnas, esa request devolvería el correo a PENDIENTE y el cliente lo recibiría dos
+ * veces.
+ */
 @Entity
+@DynamicUpdate
 public class Guia {
 
     // --- Identidad de la guía ---
@@ -63,11 +74,24 @@ public class Guia {
     private String horarioFooter;
 
     /**
+     * El transportista que nombra el pie ("TRANSPORTE: SAMEX"), tal cual lo leyó el parser. Es
+     * solo una pista para bodega: el que decide es {@link #transportista}, que elige bodega.
+     */
+    @Column(length = 50)
+    private String transportistaFooter;
+
+    /**
      * De dónde salió {@link #direccion}. Null en las guías importadas antes de que
      * existiera el campo.
      */
     @Enumerated(EnumType.STRING)
     private OrigenDireccion origenDireccion;
+
+    /**
+     * Cuándo se creó la guía en SAP ({@code DocDate}). Solo fecha: SAP no le guarda hora.
+     * Null en las guías importadas antes de que existiera el campo.
+     */
+    private LocalDate fechaDocumento;
 
     // --- Datos para armar la ruta ---
 
@@ -91,6 +115,18 @@ public class Guia {
     // --- Datos de la guía que se van generando en la app ---
 
     private Integer repartidorId;
+
+    /**
+     * El transportista externo que lleva la guía ("SAMEX"), o null si la reparte Calimport.
+     *
+     * <p>Lo elige bodega en la app, en el mismo selector que el repartidor: una guía tiene uno
+     * u otro, nunca los dos. Marcarla es entregársela, así que queda recibida en ese momento
+     * ({@link #recibidaPorRepartidor} y su fecha). Es un dato de la app, no de SAP, así que la
+     * sincronización no lo toca; en SAP se ve como T con el transportista en
+     * {@code U_Despachador}. Una guía con transportista no entra en rutas.
+     */
+    @Column(length = 50)
+    private String transportista;
 
     @Column(nullable = false)
     private boolean recibidaPorRepartidor;
@@ -145,6 +181,28 @@ public class Guia {
      */
     @Column(nullable = false)
     private boolean sincronizada = true;
+
+    // --- Correo de despacho al cliente ---
+
+    /**
+     * El aviso al cliente de que su despacho se entregó. Null = no corresponde: sin entregar,
+     * o entregada antes de que existiera el correo. Lo escribe solo
+     * {@link com.calimport.guias.correo.CorreoDespachoService}.
+     */
+    @Enumerated(EnumType.STRING)
+    private EstadoCorreo correoEstado;
+
+    /** A qué casillas salió, sin la copia interna. */
+    private String correoDestino;
+
+    @Column(nullable = false)
+    private int correoIntentos;
+
+    /** El último intento; si salió, cuándo salió. */
+    private Instant correoFecha;
+
+    /** Por qué todavía no sale, o por qué no va a salir. */
+    private String correoMotivo;
 
     // --- constructores ---
 
@@ -231,12 +289,28 @@ public class Guia {
         this.horarioFooter = horarioFooter;
     }
 
+    public String getTransportistaFooter() {
+        return transportistaFooter;
+    }
+
+    public void setTransportistaFooter(String transportistaFooter) {
+        this.transportistaFooter = transportistaFooter;
+    }
+
     public OrigenDireccion getOrigenDireccion() {
         return origenDireccion;
     }
 
     public void setOrigenDireccion(OrigenDireccion origenDireccion) {
         this.origenDireccion = origenDireccion;
+    }
+
+    public LocalDate getFechaDocumento() {
+        return fechaDocumento;
+    }
+
+    public void setFechaDocumento(LocalDate fechaDocumento) {
+        this.fechaDocumento = fechaDocumento;
     }
 
     public Instant getFechaFotoEnSap() {
@@ -315,6 +389,14 @@ public class Guia {
         this.repartidorId = repartidorId;
     }
 
+    public String getTransportista() {
+        return transportista;
+    }
+
+    public void setTransportista(String transportista) {
+        this.transportista = transportista;
+    }
+
     public boolean isRecibidaPorRepartidor() {
         return recibidaPorRepartidor;
     }
@@ -377,5 +459,45 @@ public class Guia {
 
     public void setSincronizada(boolean sincronizada) {
         this.sincronizada = sincronizada;
+    }
+
+    public EstadoCorreo getCorreoEstado() {
+        return correoEstado;
+    }
+
+    public void setCorreoEstado(EstadoCorreo correoEstado) {
+        this.correoEstado = correoEstado;
+    }
+
+    public String getCorreoDestino() {
+        return correoDestino;
+    }
+
+    public void setCorreoDestino(String correoDestino) {
+        this.correoDestino = correoDestino;
+    }
+
+    public int getCorreoIntentos() {
+        return correoIntentos;
+    }
+
+    public void setCorreoIntentos(int correoIntentos) {
+        this.correoIntentos = correoIntentos;
+    }
+
+    public Instant getCorreoFecha() {
+        return correoFecha;
+    }
+
+    public void setCorreoFecha(Instant correoFecha) {
+        this.correoFecha = correoFecha;
+    }
+
+    public String getCorreoMotivo() {
+        return correoMotivo;
+    }
+
+    public void setCorreoMotivo(String correoMotivo) {
+        this.correoMotivo = correoMotivo;
     }
 }

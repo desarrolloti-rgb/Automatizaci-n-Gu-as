@@ -22,6 +22,7 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -129,5 +130,40 @@ class RepartidorServiceTest {
         Repartidor resultado = service.upsertDesdeSap(7, "Juan Perez", "juan@calimport.cl", false, Rol.Despachador);
 
         assertFalse(resultado.isActivo());
+    }
+
+    @Test
+    void elLoginNoTocaSiElRepartidorVuelveABodega() {
+        // No viene de SAP: lo define bodega al generar sus rutas.
+        Repartidor existente = repartidor(7, "Juan Perez", "juan@calimport.cl", true);
+        existente.setVuelveABodega(true);
+        when(repartidorRepository.findById(7)).thenReturn(Optional.of(existente));
+        devuelveLoQueGuarda();
+
+        Repartidor resultado = service.upsertDesdeSap(7, "Juan Perez", "juan@calimport.cl", true, Rol.Despachador);
+
+        assertTrue(resultado.isVuelveABodega());
+    }
+
+    @Test
+    void recordarLaVueltaLaDejaComoLoHabitual() {
+        Repartidor existente = repartidor(7, "Juan Perez", "juan@calimport.cl", true);
+        when(repartidorRepository.findById(7)).thenReturn(Optional.of(existente));
+
+        service.recordarVuelta(7, true);
+
+        assertTrue(existente.isVuelveABodega());
+        verify(repartidorRepository).save(existente);
+    }
+
+    @Test
+    void recordarLaMismaVueltaNoEscribeNada() {
+        Repartidor existente = repartidor(7, "Juan Perez", "juan@calimport.cl", true);
+        existente.setVuelveABodega(true);
+        when(repartidorRepository.findById(7)).thenReturn(Optional.of(existente));
+
+        service.recordarVuelta(7, true);
+
+        verify(repartidorRepository, never()).save(any());
     }
 }

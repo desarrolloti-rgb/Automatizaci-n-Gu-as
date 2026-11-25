@@ -33,6 +33,14 @@ public class Repartidor {
     @Column(nullable = false)
     private Rol rol = Rol.Despachador;
 
+    /**
+     * Si suele volver a bodega al terminar la ruta (uno vuelve y otro no). Es lo que trae
+     * marcado el formulario de la ruta; no viene de SAP, así que el login no lo toca.
+     * El nombre va explícito: la convención de Spring no separa "AB" y buscaría "vuelveabodega".
+     */
+    @Column(name = "vuelve_a_bodega", nullable = false)
+    private boolean vuelveABodega;
+
     // --- getters y setters ---
 
     public int getEmployeeId() {
@@ -73,5 +81,13 @@ public class Repartidor {
 
     public void setRol(Rol rol) {
         this.rol = rol;
+    }
+
+    public boolean isVuelveABodega() {
+        return vuelveABodega;
+    }
+
+    public void setVuelveABodega(boolean vuelveABodega) {
+        this.vuelveABodega = vuelveABodega;
     }
 }

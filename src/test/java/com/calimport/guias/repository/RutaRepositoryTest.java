@@ -16,6 +16,8 @@ import com.calimport.guias.model.Ruta;
 import jakarta.persistence.EntityManager;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** Contra H2 con las migraciones de Flyway: lo que importa acá son las restricciones UNIQUE. */
@@ -50,20 +52,61 @@ class RutaRepositoryTest {
     }
 
     @Test
-    void regenerarLaRutaDelDiaReemplazaLaAnteriorSinChocarConLasRestricciones() {
+    void regenerarReplanificaLaMismaRutaSinChocarConLasRestricciones() {
+        // La ruta es lo que se mide: regenerarla no la borra, le cambia el plan y las paradas.
         Guia a = guia(2001);
         Guia b = guia(2002);
         guardarRuta(7, List.of(a, b));
+        Long id = rutaRepository.findByRepartidorIdAndFecha(7, FECHA).orElseThrow().getId();
 
         rutaRepository.borrarParadasPrevias(List.of(b.getId(), a.getId()), 7, FECHA);
-        rutaRepository.borrarRuta(7, FECHA);
-        guardarRuta(7, List.of(guiaRepository.findById(b.getId()).orElseThrow(),
-                guiaRepository.findById(a.getId()).orElseThrow()));
+        Ruta ruta = rutaRepository.findByRepartidorIdAndFecha(7, FECHA).orElseThrow();
+        Instant termino = Instant.parse("2026-09-15T16:10:00Z");
+        ruta.planificar(LocalTime.of(10, 0), true, 23.5, termino);
+        ruta.agregarParada(guiaRepository.findById(b.getId()).orElseThrow(), 1, Instant.now());
+        ruta.agregarParada(guiaRepository.findById(a.getId()).orElseThrow(), 2, Instant.now());
+        rutaRepository.save(ruta);
+        entityManager.flush();
+        entityManager.clear();
 
         Ruta nueva = rutaRepository.findByRepartidorIdAndFecha(7, FECHA).orElseThrow();
         assertEquals(1, rutaRepository.count());
+        assertEquals(id, nueva.getId());
         assertEquals(b.getId(), nueva.getParadas().get(0).getGuia().getId());
         assertEquals(a.getId(), nueva.getParadas().get(1).getGuia().getId());
+        assertEquals(LocalTime.of(10, 0), nueva.getHoraSalida());
+        assertTrue(nueva.isVuelveABodega());
+        assertEquals(23.5, nueva.getKmPlanificados());
+        assertEquals(termino, nueva.getTerminoEstimado());
+    }
+
+    @Test
+    void unaRutaSinPlanNoVuelveYNoTieneKm() {
+        guardarRuta(7, List.of(guia(2005)));
+
+        Ruta ruta = rutaRepository.findByRepartidorIdAndFecha(7, FECHA).orElseThrow();
+        assertFalse(ruta.isVuelveABodega());
+        assertNull(ruta.getKmPlanificados());
+        assertNull(ruta.getTerminoEstimado());
+    }
+
+    @Test
+    void elOdometroAnotadoSeGuardaConCuandoSeAnoto() {
+        guardarRuta(7, List.of(guia(2006)));
+        Ruta ruta = rutaRepository.findByRepartidorIdAndFecha(7, FECHA).orElseThrow();
+        Instant alSalir = Instant.parse("2026-09-15T12:25:00Z");
+        Instant alTerminar = Instant.parse("2026-09-15T20:40:00Z");
+        ruta.anotarOdometroSalida(12340, alSalir);
+        ruta.anotarOdometroTermino(12403, alTerminar);
+        rutaRepository.save(ruta);
+        entityManager.flush();
+        entityManager.clear();
+
+        Ruta leida = rutaRepository.findByRepartidorIdAndFecha(7, FECHA).orElseThrow();
+        assertEquals(12340, leida.getOdometroSalida());
+        assertEquals(alSalir, leida.getOdometroSalidaEn());
+        assertEquals(12403, leida.getOdometroTermino());
+        assertEquals(alTerminar, leida.getOdometroTerminoEn());
     }
 
     @Test
@@ -73,7 +116,6 @@ class RutaRepositoryTest {
         guardarRuta(7, List.of(a, b));
 
         rutaRepository.borrarParadasPrevias(List.of(b.getId()), 8, FECHA);
-        rutaRepository.borrarRuta(8, FECHA);
         guardarRuta(8, List.of(guiaRepository.findById(b.getId()).orElseThrow()));
 
         Ruta deJuan = rutaRepository.findByRepartidorIdAndFecha(7, FECHA).orElseThrow();

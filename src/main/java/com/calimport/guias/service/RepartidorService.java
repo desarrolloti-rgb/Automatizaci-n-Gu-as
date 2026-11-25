@@ -51,4 +51,17 @@ public class RepartidorService {
         repartidor.setRol(rol);
         return repartidorRepository.save(repartidor);
     }
+
+    /**
+     * Deja como habitual lo que bodega marcó al generar su ruta. Uno de los repartidores vuelve
+     * a bodega al terminar y el otro no: así el formulario lo trae marcado la próxima vez.
+     */
+    @Transactional
+    public void recordarVuelta(int employeeId, boolean vuelveABodega) {
+        Repartidor repartidor = obtenerPorId(employeeId);
+        if (repartidor.isVuelveABodega() != vuelveABodega) {
+            repartidor.setVuelveABodega(vuelveABodega);
+            repartidorRepository.save(repartidor);
+        }
+    }
 }

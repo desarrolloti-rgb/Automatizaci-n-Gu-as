@@ -1,5 +1,7 @@
 package com.calimport.guias.service;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.ZoneId;
@@ -7,6 +9,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
 
@@ -20,6 +23,7 @@ import org.springframework.transaction.support.TransactionOperations;
 import com.calimport.guias.config.RutasConfig;
 import com.calimport.guias.controller.dto.GenerarRutaRequest;
 import com.calimport.guias.controller.dto.GenerarRutaRequest.GuiaEnRuta;
+import com.calimport.guias.controller.dto.OdometroRequest;
 import com.calimport.guias.controller.dto.RutaResponse;
 import com.calimport.guias.model.EstadoGuia;
 import com.calimport.guias.model.Guia;
@@ -31,6 +35,7 @@ import com.calimport.guias.repository.RutaRepository;
 import com.calimport.guias.service.Geocodificador.Ubicacion;
 import com.calimport.guias.service.InterpreteComentarios.Interpretacion;
 import com.calimport.guias.service.LinksNavegacion.Punto;
+import com.calimport.guias.service.OptimizadorRutas.Plan;
 import com.calimport.guias.service.OptimizadorRutas.Visita;
 import com.calimport.guias.utils.ApiException;
 
@@ -51,6 +56,12 @@ public class RutaService {
 
     private static final Logger log = LoggerFactory.getLogger(RutaService.class);
     private static final DateTimeFormatter HORA = DateTimeFormatter.ofPattern("HH:mm");
+
+    /**
+     * Más que esto entre la salida y el término es un número mal escrito (un dígito de más):
+     * ninguna ruta de reparto en Santiago se acerca. Se rechaza para que lo corrija en el momento.
+     */
+    static final int MAX_KM_POR_DIA = 500;
 
     private final GuiaService guiaService;
     private final RepartidorService repartidorService;
@@ -88,10 +99,11 @@ public class RutaService {
         }
 
         List<Guia> guias = interpretarComentarios(ubicar(cargarGuias(request.guias())));
+        boolean vuelveABodega = request.vuelveABodega() != null ? request.vuelveABodega() : repartidor.isVuelveABodega();
 
-        List<Visita> visitas;
+        Plan plan;
         try {
-            visitas = optimizadorRutas.optimizar(request.fecha(), request.horaSalida(), guias);
+            plan = optimizadorRutas.optimizar(request.fecha(), request.horaSalida(), vuelveABodega, guias);
         } catch (ApiException e) {
             throw e;
         } catch (RuntimeException e) {
@@ -99,7 +111,7 @@ public class RutaService {
             throw new ApiException(HttpStatus.BAD_GATEWAY, "Error calculando el orden de la ruta");
         }
 
-        return transacciones.execute(estado -> guardar(request, guias, visitas));
+        return transacciones.execute(estado -> guardar(request, vuelveABodega, guias, plan));
     }
 
     @Transactional(readOnly = true)
@@ -108,6 +120,51 @@ public class RutaService {
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND,
                         "No hay ruta para el repartidor " + repartidorId + " el " + fecha));
         return aRespuesta(ruta);
+    }
+
+    /**
+     * El repartidor anota lo que marca el odómetro al salir o al terminar, en su ruta de
+     * <b>hoy</b>: la lectura vale como respaldo porque se anota en el momento, y cada una
+     * guarda cuándo. Es el kilometraje real contra el que se compara el plan.
+     */
+    @Transactional
+    public RutaResponse anotarOdometro(Integer repartidorId, OdometroRequest request) {
+        if (request.salida() == null && request.termino() == null) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Indica el kilometraje al salir o al terminar");
+        }
+        LocalDate hoy = LocalDate.now(config.zona());
+        Ruta ruta = rutaRepository.findByRepartidorIdAndFecha(repartidorId, hoy)
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND,
+                        "No tienes ruta para hoy: el kilometraje se anota en la ruta que genera bodega"));
+
+        // Se valida el par como quedaría, así una corrección de la salida también se revisa
+        // contra el término ya anotado.
+        Integer salida = request.salida() != null ? request.salida() : ruta.getOdometroSalida();
+        Integer termino = request.termino() != null ? request.termino() : ruta.getOdometroTermino();
+        if (salida != null && termino != null) {
+            if (termino < salida) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, "El kilometraje al terminar (" + km(termino)
+                        + ") no puede ser menor que al salir (" + km(salida) + ")");
+            }
+            if (termino - salida > MAX_KM_POR_DIA) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, "Entre la salida (" + km(salida) + ") y el término ("
+                        + km(termino) + ") hay " + km(termino - salida) + " km: revisa los números");
+            }
+        }
+
+        Instant ahora = Instant.now();
+        if (request.salida() != null) {
+            ruta.anotarOdometroSalida(request.salida(), ahora);
+        }
+        if (request.termino() != null) {
+            ruta.anotarOdometroTermino(request.termino(), ahora);
+        }
+        return aRespuesta(rutaRepository.save(ruta));
+    }
+
+    /** 12403 → "12.403", como se lee en el tablero. */
+    private static String km(int km) {
+        return String.format(Locale.ROOT, "%,d", km).replace(',', '.');
     }
 
     private List<Guia> cargarGuias(List<GuiaEnRuta> pedidas) {
@@ -124,6 +181,11 @@ public class RutaService {
             if (guia.getEstado() != EstadoGuia.PENDIENTE) {
                 throw new ApiException(HttpStatus.CONFLICT,
                         "La guía folio " + guia.getFolio() + " ya fue resuelta (" + guia.getEstado() + ")");
+            }
+            // Se descarta acá, antes de ubicar y ordenar, para no gastar llamadas externas en
+            // una ruta que no se va a poder asignar.
+            if (guia.getTransportista() != null) {
+                throw new ApiException(HttpStatus.CONFLICT, GuiaService.noEntraEnRuta(guia));
             }
             if (pedida.traeHorario()) {
                 guia = guiaService.definirHorario(guia.getId(), pedida.ventanaDesde(), pedida.ventanaHasta(), pedida.nota());
@@ -202,19 +264,29 @@ public class RutaService {
         return (delPie != null && !delPie.isBlank()) ? delPie : guia.getComentario();
     }
 
-    private RutaResponse guardar(GenerarRutaRequest request, List<Guia> guias, List<Visita> visitas) {
+    private RutaResponse guardar(GenerarRutaRequest request, boolean vuelveABodega, List<Guia> guias, Plan plan) {
         List<Long> ids = guias.stream().map(Guia::getId).toList();
-        // Regenerar reemplaza la ruta del día, y una guía reasignada sale de la ruta donde estaba.
+        // Se van las paradas de la ruta del día y las de estas guías en otras rutas: una guía
+        // reasignada sale de la ruta donde estaba.
         rutaRepository.borrarParadasPrevias(ids, request.repartidorId(), request.fecha());
-        rutaRepository.borrarRuta(request.repartidorId(), request.fecha());
 
-        Ruta ruta = new Ruta(request.repartidorId(), request.fecha(), request.horaSalida());
+        // Regenerar replanifica la misma ruta en vez de borrarla: es lo que se mide, y lo que
+        // ya se haya medido de ella no se puede perder. Se busca después del delete, que
+        // limpia el contexto de persistencia: así llega sin las paradas borradas.
+        Ruta ruta = rutaRepository.findByRepartidorIdAndFecha(request.repartidorId(), request.fecha())
+                .orElseGet(() -> new Ruta(request.repartidorId(), request.fecha(), request.horaSalida()));
+        ruta.planificar(request.horaSalida(), vuelveABodega, plan.kilometros(), plan.termino());
         int orden = 1;
-        for (Visita visita : visitas) {
+        for (Visita visita : plan.visitas()) {
             Guia guia = guiaService.asignarRepartidor(visita.guiaId(), request.repartidorId());
             ruta.agregarParada(guia, orden++, visita.llegada());
         }
-        return aRespuesta(rutaRepository.save(ruta));
+        RutaResponse respuesta = aRespuesta(rutaRepository.save(ruta));
+
+        if (request.vuelveABodega() != null) {
+            repartidorService.recordarVuelta(request.repartidorId(), vuelveABodega);
+        }
+        return respuesta;
     }
 
     RutaResponse aRespuesta(Ruta ruta) {
@@ -248,8 +320,25 @@ public class RutaService {
         }
 
         Punto origen = new Punto(config.getOrigenLatitud(), config.getOrigenLongitud());
-        return new RutaResponse(ruta.getId(), ruta.getRepartidorId(), ruta.getFecha(), ruta.getHoraSalida(), paradas,
-                LinksNavegacion.tramosGoogleMaps(origen, puntos, config.getParadasPorTramoMaps()), advertencias);
+        // Con vuelta, el plan cuenta el regreso: el link termina en la bodega para que Google
+        // Maps muestre la misma ruta, y los mismos km, que el plan. La bodega no es una parada.
+        if (ruta.isVuelveABodega() && !puntos.isEmpty()) {
+            puntos.add(origen);
+        }
+        Instant salida = ruta.getFecha().atTime(ruta.getHoraSalida()).atZone(zona).toInstant();
+        Instant termino = ruta.getTerminoEstimado();
+        return new RutaResponse(ruta.getId(), ruta.getRepartidorId(), ruta.getFecha(), ruta.getHoraSalida(),
+                ruta.isVuelveABodega(),
+                ruta.getKmPlanificados() == null ? null : Math.round(ruta.getKmPlanificados() * 10) / 10.0,
+                termino == null ? null : (int) Duration.between(salida, termino).toMinutes(),
+                hora(termino, zona),
+                ruta.getOdometroSalida(), hora(ruta.getOdometroSalidaEn(), zona),
+                ruta.getOdometroTermino(), hora(ruta.getOdometroTerminoEn(), zona),
+                paradas, LinksNavegacion.tramosGoogleMaps(origen, puntos, config.getParadasPorTramoMaps()), advertencias);
+    }
+
+    private static LocalTime hora(Instant instante, ZoneId zona) {
+        return instante == null ? null : instante.atZone(zona).toLocalTime().withSecond(0).withNano(0);
     }
 
     private static String rango(LocalTime desde, LocalTime hasta) {

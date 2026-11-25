@@ -10,6 +10,8 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
+import com.calimport.guias.service.AlmacenamientoFotos;
+
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
@@ -71,6 +73,39 @@ class PerfilLocalTest {
         mockMvc.perform(post("/api/auth/login").contentType(MediaType.APPLICATION_JSON)
                         .content("{\"email\":\"uno@calimport.local\",\"password\":\"mala\"}"))
                 .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void bodegaCambiaYQuitaElRepartidorAunqueYaLaHayanRetirado() throws Exception {
+        String jefe = login("jefe@calimport.local", "1234");
+        String uno = login("uno@calimport.local", "1234");
+
+        // La última pendiente, para no pisar la que usa el flujo completo.
+        JsonNode guias = json(mockMvc.perform(get("/api/guias?estado=PENDIENTE").header("Authorization", jefe))
+                .andExpect(status().isOk()).andReturn());
+        long id = guias.get(guias.size() - 1).get("id").asLong();
+
+        mockMvc.perform(patch("/api/guias/" + id + "/repartidor").header("Authorization", jefe)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"repartidorId\": 1}"))
+                .andExpect(status().isOk());
+        mockMvc.perform(patch("/api/guias/" + id + "/recepcion").header("Authorization", uno))
+                .andExpect(jsonPath("$.recibidaPorRepartidor").value(true));
+
+        // Pasa a otro: vuelve a "por retirar" y el primero ya no la ve.
+        mockMvc.perform(patch("/api/guias/" + id + "/repartidor").header("Authorization", jefe)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"repartidorId\": 2}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.repartidorId").value(2))
+                .andExpect(jsonPath("$.recibidaPorRepartidor").value(false));
+        mockMvc.perform(get("/api/guias").header("Authorization", uno))
+                .andExpect(jsonPath("$[?(@.id == " + id + ")]").isEmpty());
+
+        // Y se le puede quitar: queda sin asignar.
+        mockMvc.perform(patch("/api/guias/" + id + "/repartidor").header("Authorization", jefe)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"repartidorId\": null}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.repartidorId").isEmpty())
+                .andExpect(jsonPath("$.estado").value("PENDIENTE"));
     }
 
     @Test
@@ -142,6 +177,11 @@ class PerfilLocalTest {
         mockMvc.perform(get(foto.get("urlFoto").asString()).header("Authorization", jefe))
                 .andExpect(status().isOk());
 
+        // Y el link que va a SAP abre la misma foto sin token.
+        mockMvc.perform(get(AlmacenamientoFotos.rutaPublica(foto.get("urlFoto").asString())))
+                .andExpect(status().isOk())
+                .andExpect(content().bytes(JPEG));
+
         // Ya resuelta: no admite otra foto.
         mockMvc.perform(multipart("/api/guias/" + id + "/foto")
                         .file(new MockMultipartFile("archivo", "otra.jpg", "image/jpeg", JPEG))
@@ -180,6 +220,16 @@ class PerfilLocalTest {
     void lasFotosExigenToken() throws Exception {
         mockMvc.perform(get("/api/fotos/guia-1-00000000-0000-0000-0000-000000000000.jpg"))
                 .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void elLinkPublicoSoloSirveFotosPorSuNombreExacto() throws Exception {
+        // Sin token responde, pero un nombre que no existe es 404 y uno con otra forma
+        // también: no hay forma de listar ni de salir del bucket.
+        mockMvc.perform(get("/api/evidencia/guia-1-00000000-0000-0000-0000-000000000000.jpg"))
+                .andExpect(status().isNotFound());
+        mockMvc.perform(get("/api/evidencia/application.properties"))
+                .andExpect(status().isNotFound());
     }
 
     @Test

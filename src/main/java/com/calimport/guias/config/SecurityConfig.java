@@ -3,6 +3,7 @@ package com.calimport.guias.config;
 import com.calimport.guias.security.JwtAuthenticationFilter;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
@@ -31,7 +32,12 @@ public class SecurityConfig {
             .csrf(csrf -> csrf.disable())
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
-                .requestMatchers("/api/auth/login").permitAll()
+                // renovar y salir no llevan token: los autoriza la cookie de la sesión común
+                // (SesionComun), que es justamente lo que se usa cuando el token falta o venció.
+                .requestMatchers("/api/auth/login", "/api/auth/renovar", "/api/auth/salir").permitAll()
+                // El link de la foto que queda en U_UrlFoto: lo abre gente de SAP sin sesión
+                // en la app. Solo sirve fotos, y solo por nombre exacto (lleva un UUID).
+                .requestMatchers(HttpMethod.GET, "/api/evidencia/*").permitAll()
                 // Lo único que se protege es la API. Todo lo demás es la app Angular que
                 // sirve este mismo jar: HTML, JS y CSS que cualquiera puede descargar de
                 // todas formas. Protegerlos obligaría a mandar el token en la navegación

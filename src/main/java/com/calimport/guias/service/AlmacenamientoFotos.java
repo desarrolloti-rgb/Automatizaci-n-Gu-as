@@ -1,9 +1,5 @@
 package com.calimport.guias.service;
 
-import java.io.IOException;
-import java.io.UncheckedIOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
@@ -11,7 +7,6 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.regex.Pattern;
 
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
@@ -19,27 +14,43 @@ import org.springframework.stereotype.Service;
 import com.calimport.guias.utils.ApiException;
 
 /**
- * Guarda las fotos de entrega en disco y calcula su hash.
+ * Valida, nombra y calcula el hash de la evidencia de entrega: las fotos del repartidor y el PDF
+ * de un transportista externo. Dónde quedan los bytes lo decide {@link DepositoFotos}: disco en
+ * local, Cloud Storage en la VM.
  *
  * <p>El hash lo calcula el servidor sobre los bytes recibidos, no el celular: así el valor
  * que queda en la guía corresponde con certeza al archivo guardado.
- *
- * <p>Sirve en local y en una VM. En Cloud Run el disco es efímero, así que ahí habrá que
- * cambiar esta clase por una que escriba en Cloud Storage; quien la usa no cambia.
  */
 @Service
 public class AlmacenamientoFotos {
 
-    /** Solo nombres generados por {@link #guardar}: impide leer fuera del directorio con "../". */
+    /**
+     * Solo nombres generados por {@link #guardar} y {@link #guardarPdf}: impide leer fuera del
+     * directorio con "../".
+     */
     private static final Pattern NOMBRE_VALIDO =
-            Pattern.compile("^guia-\\d+-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\.(jpg|png|webp)$");
+            Pattern.compile("^guia-\\d+-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\.(jpg|png|webp|pdf)$");
 
+    /**
+     * El PDF más grande que se acepta de un transportista. El albarán de Samex pesa ~450 KB (una
+     * página de texto y dos fotos); 15 MB deja margen para varias fotos sin aceptar cualquier cosa.
+     */
+    static final int TOPE_PDF = 15 * 1024 * 1024;
+
+    /** La que usa la app, con token. Es la que queda guardada en la guía. */
     static final String PREFIJO_URL = "/api/fotos/";
 
-    private final Path directorio;
+    /**
+     * La que va a SAP, sin token: quien la abre desde SAP no tiene sesión en la app. La
+     * protege el UUID del nombre, que no se puede adivinar. Corta a propósito: U_UrlFoto
+     * mide 100, y dominio + esta ruta + nombre con un id de 6 dígitos suma 96.
+     */
+    public static final String PREFIJO_URL_PUBLICA = "/api/evidencia/";
 
-    public AlmacenamientoFotos(@Value("${fotos.directorio}") String directorio) {
-        this.directorio = Path.of(directorio).toAbsolutePath().normalize();
+    private final DepositoFotos deposito;
+
+    public AlmacenamientoFotos(DepositoFotos deposito) {
+        this.deposito = deposito;
     }
 
     /**
@@ -63,28 +74,63 @@ public class AlmacenamientoFotos {
         }
 
         String nombre = "guia-" + guiaId + "-" + UUID.randomUUID() + "." + extension;
-        try {
-            Files.createDirectories(directorio);
-            Files.write(directorio.resolve(nombre), contenido);
-        } catch (IOException e) {
-            throw new UncheckedIOException("No se pudo guardar la foto " + nombre, e);
-        }
+        deposito.escribir(nombre, contenido, tipoSegunExtension(nombre));
         return new FotoGuardada(PREFIJO_URL + nombre, sha256(contenido));
+    }
+
+    /**
+     * La evidencia de un transportista externo: el PDF que baja su portal (el albarán de Samex,
+     * con la prueba de entrega y las fotos de la guía firmada). Se guarda tal cual llegó, con su
+     * SHA-256, igual que una foto: es la evidencia. Como el de las fotos, el nombre lleva un UUID
+     * y no se reemplaza nunca.
+     *
+     * <p>No es la puerta del repartidor: {@link #guardar} sigue aceptando solo imágenes.
+     */
+    public FotoGuardada guardarPdf(Long guiaId, byte[] contenido) {
+        if (contenido == null || contenido.length == 0) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "El PDF está vacío");
+        }
+        if (contenido.length > TOPE_PDF) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "El PDF supera los " + TOPE_PDF / (1024 * 1024) + " MB");
+        }
+        // Por el contenido, como las fotos: todo PDF empieza con "%PDF-".
+        if (!esPdf(contenido)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "El archivo debe ser un PDF");
+        }
+        String nombre = "guia-" + guiaId + "-" + UUID.randomUUID() + ".pdf";
+        deposito.escribir(nombre, contenido, MediaType.APPLICATION_PDF);
+        return new FotoGuardada(PREFIJO_URL + nombre, sha256(contenido));
+    }
+
+    static boolean esPdf(byte[] b) {
+        return b.length >= 5 && b[0] == '%' && b[1] == 'P' && b[2] == 'D' && b[3] == 'F' && b[4] == '-';
     }
 
     public Optional<Foto> leer(String nombre) {
         if (nombre == null || !NOMBRE_VALIDO.matcher(nombre).matches()) {
             return Optional.empty();
         }
-        Path archivo = directorio.resolve(nombre);
-        if (!Files.isRegularFile(archivo)) {
-            return Optional.empty();
+        return deposito.leer(nombre).map(bytes -> new Foto(bytes, tipoSegunExtension(nombre)));
+    }
+
+    /**
+     * El nombre del archivo, a partir de la URL que quedó en la guía, para leerlo con
+     * {@link #leer}. Null si no es una foto de esta app.
+     */
+    public static String nombreDe(String urlFoto) {
+        if (urlFoto == null || !urlFoto.startsWith(PREFIJO_URL)) {
+            return null;
         }
-        try {
-            return Optional.of(new Foto(Files.readAllBytes(archivo), tipoSegunExtension(nombre)));
-        } catch (IOException e) {
-            throw new UncheckedIOException("No se pudo leer la foto " + nombre, e);
-        }
+        return urlFoto.substring(PREFIJO_URL.length());
+    }
+
+    /**
+     * La ruta sin token de una foto guardada, a partir de la que quedó en la guía. Null si
+     * no es una foto de esta app (una URL que no empieza con {@link #PREFIJO_URL}).
+     */
+    public static String rutaPublica(String urlFoto) {
+        String nombre = nombreDe(urlFoto);
+        return nombre == null ? null : PREFIJO_URL_PUBLICA + nombre;
     }
 
     static String extensionSegunContenido(byte[] b) {
@@ -102,6 +148,9 @@ public class AlmacenamientoFotos {
     }
 
     private static MediaType tipoSegunExtension(String nombre) {
+        if (nombre.endsWith(".pdf")) {
+            return MediaType.APPLICATION_PDF;
+        }
         if (nombre.endsWith(".png")) {
             return MediaType.IMAGE_PNG;
         }
