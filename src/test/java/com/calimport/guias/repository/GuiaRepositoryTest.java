@@ -1,5 +1,6 @@
 package com.calimport.guias.repository;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
@@ -8,6 +9,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.calimport.guias.model.EstadoCorreo;
 import com.calimport.guias.model.EstadoGuia;
 import com.calimport.guias.model.Guia;
 
@@ -15,6 +17,7 @@ import jakarta.persistence.EntityManager;
 import jakarta.validation.ConstraintViolationException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -133,5 +136,70 @@ class GuiaRepositoryTest {
         Guia sinFolio = new Guia(1012, null, "Cliente", "Direccion");
 
         assertThrows(ConstraintViolationException.class, () -> guiaRepository.saveAndFlush(sinFolio));
+    }
+
+    // --- correo de despacho ---
+
+    private Long entregadaConCorreoPorEnviar(int docEntry, long folio) {
+        Guia guia = nuevaGuia(docEntry, folio);
+        guia.setEstado(EstadoGuia.ENTREGADA);
+        guia.setSincronizada(false);
+        guia.setCorreoEstado(EstadoCorreo.PENDIENTE);
+        Long id = guiaRepository.saveAndFlush(guia).getId();
+        entityManager.clear();
+        return id;
+    }
+
+    @Test
+    void unaGuiaNuevaNoTieneCorreoQueEnviar() {
+        // Null y no PENDIENTE: las guías anteriores al correo no deben salir todas de golpe.
+        Guia guardada = guiaRepository.saveAndFlush(nuevaGuia(1013, 5567L));
+
+        assertNull(guardada.getCorreoEstado());
+        assertEquals(0, guardada.getCorreoIntentos());
+        assertTrue(guiaRepository.findByCorreoEstado(EstadoCorreo.PENDIENTE).isEmpty());
+    }
+
+    @Test
+    void guardarElCorreoSoloEscribeSusColumnas() {
+        Long id = entregadaConCorreoPorEnviar(1014, 5568L);
+        assertEquals(1, guiaRepository.findByCorreoEstado(EstadoCorreo.PENDIENTE).size());
+
+        // La copia que tiene el proceso de correo: en lo demás puede estar vieja.
+        Guia delProceso = guiaRepository.findById(id).orElseThrow();
+        entityManager.detach(delProceso);
+        delProceso.setSincronizada(true);
+        delProceso.setCorreoEstado(EstadoCorreo.ENVIADO);
+        delProceso.setCorreoDestino("compras@cliente.cl");
+        delProceso.setCorreoIntentos(1);
+        delProceso.setCorreoFecha(Instant.parse("2026-11-19T15:00:00Z"));
+        guiaRepository.guardarCorreo(delProceso);
+        entityManager.clear();
+
+        Guia leida = guiaRepository.findById(id).orElseThrow();
+        assertEquals(EstadoCorreo.ENVIADO, leida.getCorreoEstado());
+        assertEquals("compras@cliente.cl", leida.getCorreoDestino());
+        assertEquals(1, leida.getCorreoIntentos());
+        assertEquals(Instant.parse("2026-11-19T15:00:00Z"), leida.getCorreoFecha());
+        assertFalse(leida.isSincronizada(), "lo que no es del correo no lo escribe");
+    }
+
+    @Test
+    void otroCambioALaGuiaNoDevuelveElCorreoAPendiente() {
+        // Bodega reintenta el envío a SAP con la guía ya leída, justo cuando el proceso de
+        // correo la envía. Si ese guardado escribiera todas las columnas, devolvería el correo
+        // a PENDIENTE y el cliente lo recibiría dos veces.
+        Long id = entregadaConCorreoPorEnviar(1015, 5569L);
+        Guia enLaRequest = guiaRepository.findById(id).orElseThrow();
+
+        guiaRepository.actualizarCorreo(id, EstadoCorreo.ENVIADO, "compras@cliente.cl", 1,
+                Instant.parse("2026-11-19T15:00:00Z"), null);
+        enLaRequest.setSincronizada(true);
+        entityManager.flush();
+        entityManager.clear();
+
+        Guia leida = guiaRepository.findById(id).orElseThrow();
+        assertEquals(EstadoCorreo.ENVIADO, leida.getCorreoEstado());
+        assertTrue(leida.isSincronizada());
     }
 }

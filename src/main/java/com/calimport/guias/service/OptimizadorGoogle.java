@@ -1,5 +1,6 @@
 package com.calimport.guias.service;
 
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.OffsetDateTime;
@@ -51,12 +52,12 @@ public class OptimizadorGoogle implements OptimizadorRutas {
     }
 
     @Override
-    public List<Visita> optimizar(LocalDate fecha, LocalTime horaSalida, List<Guia> guias) {
-        JsonNode respuesta = client.optimizeTours(construirConsulta(fecha, horaSalida, guias));
+    public Plan optimizar(LocalDate fecha, LocalTime horaSalida, boolean vuelveABodega, List<Guia> guias) {
+        JsonNode respuesta = client.optimizeTours(construirConsulta(fecha, horaSalida, vuelveABodega, guias));
         return leerRespuesta(respuesta, guias.size());
     }
 
-    Map<String, Object> construirConsulta(LocalDate fecha, LocalTime horaSalida, List<Guia> guias) {
+    Map<String, Object> construirConsulta(LocalDate fecha, LocalTime horaSalida, boolean vuelveABodega, List<Guia> guias) {
         ZoneId zona = config.zona();
         ZonedDateTime salida = ZonedDateTime.of(fecha, horaSalida, zona);
         ZonedDateTime finDelDia = ZonedDateTime.of(fecha, LocalTime.of(23, 59), zona);
@@ -82,7 +83,10 @@ public class OptimizadorGoogle implements OptimizadorRutas {
         vehiculo.put("startTimeWindows", List.of(Map.of("startTime", timestamp(salida))));
         vehiculo.put("costPerHour", COSTO_HORA_RUTA);
         vehiculo.put("costPerKilometer", COSTO_KILOMETRO);
-        // Sin endLocation: la ruta termina en el último cliente, la vuelta no se optimiza.
+        // Sin endLocation la ruta termina en el último cliente; con ella, el regreso entra al costo.
+        if (vuelveABodega) {
+            vehiculo.put("endLocation", latLng(config.getOrigenLatitud(), config.getOrigenLongitud()));
+        }
 
         return Map.of(
                 "considerRoadTraffic", true,
@@ -117,7 +121,12 @@ public class OptimizadorGoogle implements OptimizadorRutas {
         return ventana.isEmpty() ? null : ventana;
     }
 
-    List<Visita> leerRespuesta(JsonNode respuesta, int guiasEnviadas) {
+    /**
+     * Las visitas en orden, y del recorrido ({@code routes[0]}) los km ({@code metrics.travelDistanceMeters})
+     * y el término ({@code vehicleEndTime}: con endLocation es la llegada a bodega). Si Google no
+     * los manda, el plan queda sin ellos en vez de fallar: la ruta sirve igual.
+     */
+    Plan leerRespuesta(JsonNode respuesta, int guiasEnviadas) {
         if (respuesta == null) {
             throw new ApiException(HttpStatus.BAD_GATEWAY, "Route Optimization no devolvió respuesta");
         }
@@ -127,10 +136,11 @@ public class OptimizadorGoogle implements OptimizadorRutas {
                             + etiquetas(respuesta.path("skippedShipments")));
         }
 
+        JsonNode recorrido = respuesta.path("routes").path(0);
         List<Visita> visitas = new ArrayList<>();
         // En JSON, proto3 omite los campos en 0: vehicleIndex y shipmentIndex pueden no
         // venir. Por eso la guía se identifica por su label y no por su índice.
-        for (JsonNode visita : respuesta.path("routes").path(0).path("visits")) {
+        for (JsonNode visita : recorrido.path("visits")) {
             String label = visita.path("shipmentLabel").asString("");
             String inicio = visita.path("startTime").asString("");
             if (label.isEmpty() || inicio.isEmpty()) {
@@ -143,7 +153,12 @@ public class OptimizadorGoogle implements OptimizadorRutas {
             throw new ApiException(HttpStatus.BAD_GATEWAY, "Route Optimization devolvió " + visitas.size()
                     + " paradas para " + guiasEnviadas + " guías");
         }
-        return visitas;
+
+        JsonNode metros = recorrido.path("metrics").path("travelDistanceMeters");
+        Double kilometros = metros.isNumber() ? metros.asDouble() / 1000 : null;
+        String fin = recorrido.path("vehicleEndTime").asString("");
+        Instant termino = fin.isEmpty() ? null : OffsetDateTime.parse(fin).toInstant();
+        return new Plan(visitas, kilometros, termino);
     }
 
     private static String etiquetas(JsonNode omitidas) {

@@ -228,7 +228,7 @@ class GuiaControllerTest {
 
     @Test
     void asignarRepartidorPasaElIdDelCuerpoAlService() throws Exception {
-        when(guiaService.asignarRepartidor(1L, 7)).thenReturn(guia());
+        when(guiaService.reasignar(1L, 7)).thenReturn(guia());
 
         mockMvc.perform(patch("/api/guias/1/repartidor")
                         .header("Authorization", jefe)
@@ -236,7 +236,60 @@ class GuiaControllerTest {
                         .content("{\"repartidorId\":7}"))
                 .andExpect(status().isOk());
 
-        verify(guiaService).asignarRepartidor(1L, 7);
+        verify(guiaService).reasignar(1L, 7);
+    }
+
+    @Test
+    void unRepartidorNullQuitaLaAsignacion() throws Exception {
+        when(guiaService.reasignar(1L, null)).thenReturn(guia());
+
+        mockMvc.perform(patch("/api/guias/1/repartidor")
+                        .header("Authorization", jefe)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"repartidorId\":null}"))
+                .andExpect(status().isOk());
+
+        verify(guiaService).reasignar(1L, null);
+    }
+
+    @Test
+    void bodegaMarcaUnaGuiaComoDespachoExternoYLaRespuestaTraeElTransportista() throws Exception {
+        Guia deSamex = guia();
+        deSamex.setTransportista("SAMEX");
+        when(guiaService.definirTransportista(1L, "SAMEX")).thenReturn(deSamex);
+
+        mockMvc.perform(patch("/api/guias/1/transportista")
+                        .header("Authorization", jefe)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"transportista\":\"SAMEX\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.transportista").value("SAMEX"));
+
+        verify(guiaService).definirTransportista(1L, "SAMEX");
+    }
+
+    @Test
+    void unTransportistaNullLeQuitaLaMarca() throws Exception {
+        when(guiaService.definirTransportista(1L, null)).thenReturn(guia());
+
+        mockMvc.perform(patch("/api/guias/1/transportista")
+                        .header("Authorization", jefe)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"transportista\":null}"))
+                .andExpect(status().isOk());
+
+        verify(guiaService).definirTransportista(1L, null);
+    }
+
+    @Test
+    void unRepartidorNoPuedeMarcarDespachoExterno() throws Exception {
+        mockMvc.perform(patch("/api/guias/1/transportista")
+                        .header("Authorization", repartidor)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"transportista\":\"SAMEX\"}"))
+                .andExpect(status().isForbidden());
+
+        verify(guiaService, never()).definirTransportista(anyLong(), any());
     }
 
     @Test
@@ -247,7 +300,7 @@ class GuiaControllerTest {
                         .content("{\"repartidorId\":7}"))
                 .andExpect(status().isForbidden());
 
-        verify(guiaService, never()).asignarRepartidor(anyLong(), any());
+        verify(guiaService, never()).reasignar(anyLong(), any());
     }
 
     @Test
@@ -408,20 +461,22 @@ class GuiaControllerTest {
     @Test
     void sincronizarDevuelveElResumenDeLoImportado() throws Exception {
         when(guiaSyncService.sincronizar(LocalDate.of(2026, 8, 1), null))
-                .thenReturn(new GuiaSyncService.Resultado(12, 1, 0));
+                .thenReturn(new GuiaSyncService.Resultado(12, 1, 3, 2));
 
         mockMvc.perform(post("/api/guias/sincronizar")
                         .param("desde", "2026-08-01")
                         .header("Authorization", jefe))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.sincronizadas").value(12))
-                .andExpect(jsonPath("$.descartadas").value(1));
+                .andExpect(jsonPath("$.descartadas").value(1))
+                .andExpect(jsonPath("$.retirosEnLocal").value(3))
+                .andExpect(jsonPath("$.porTransportistaExterno").value(2));
     }
 
     @Test
     void sincronizarSinFechaUsaHoy() throws Exception {
         when(guiaSyncService.sincronizar(LocalDate.now(), null))
-                .thenReturn(new GuiaSyncService.Resultado(0, 0, 0));
+                .thenReturn(new GuiaSyncService.Resultado(0, 0, 0, 0));
 
         mockMvc.perform(post("/api/guias/sincronizar").header("Authorization", jefe))
                 .andExpect(status().isOk());
@@ -434,7 +489,7 @@ class GuiaControllerTest {
         // Acotar por arriba sirve para reimportar un dia puntual sin arrastrar todo lo
         // emitido despues.
         when(guiaSyncService.sincronizar(LocalDate.of(2026, 8, 1), LocalDate.of(2026, 8, 31)))
-                .thenReturn(new GuiaSyncService.Resultado(5, 0, 0));
+                .thenReturn(new GuiaSyncService.Resultado(5, 0, 0, 0));
 
         mockMvc.perform(post("/api/guias/sincronizar")
                         .param("desde", "2026-08-01")

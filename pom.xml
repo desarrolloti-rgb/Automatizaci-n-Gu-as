@@ -46,6 +46,18 @@
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-security</artifactId>
 		</dependency>
+		<!-- Verifican el ID token de Google con que se identifica el lector de Samex (Cloud Run Job)
+		     en /api/integraciones. Solo los modulos de Spring Security, sin la autoconfiguracion de
+		     resource server de Spring Boot, que se aplicaria a toda la app: la cadena se arma a mano
+		     en IntegracionesSecurityConfig. Versiones del BOM de Spring Boot. -->
+		<dependency>
+			<groupId>org.springframework.security</groupId>
+			<artifactId>spring-security-oauth2-resource-server</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.security</groupId>
+			<artifactId>spring-security-oauth2-jose</artifactId>
+		</dependency>
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-webmvc</artifactId>
@@ -53,6 +65,12 @@
 		<dependency>
 			<groupId>org.apache.httpcomponents.client5</groupId>
 			<artifactId>httpclient5</artifactId>
+		</dependency>
+		<!-- Correo al cliente cuando se entrega su despacho, por el SMTP de Resend: el mismo
+		     starter y el mismo relay que usa el Dashboard para el 2FA. -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-mail</artifactId>
 		</dependency>
 		<!-- Spring Boot 4 reparte las autoconfiguraciones en modulos: flyway-core trae la
 		     libreria, spring-boot-flyway el arranque automatico al levantar la app. -->
@@ -119,6 +137,14 @@
 		<dependency>
 			<groupId>com.h2database</groupId>
 			<artifactId>h2</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<!-- Reglas de capas (ArquitecturaTest): que un controller no hable con SAP ni con la
+		     base por su cuenta lo comprueba el build, no la memoria de quien edita. -->
+		<dependency>
+			<groupId>com.tngtech.archunit</groupId>
+			<artifactId>archunit-junit5</artifactId>
+			<version>1.4.1</version>
 			<scope>test</scope>
 		</dependency>
 	</dependencies>

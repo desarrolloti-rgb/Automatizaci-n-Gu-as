@@ -1,7 +1,12 @@
 package com.calimport.guias.sap;
 
+import java.text.Normalizer;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
 import java.util.EnumMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -44,15 +49,27 @@ import java.util.stream.Collectors;
  *       cualquier parte del país.
  * </ul>
  *
+ * <p><b>Desde noviembre de 2026 las guías nuevas traen una plantilla</b>, siempre en el mismo
+ * orden y con sus dos puntos:
+ *
+ * <pre>
+ * DESPACHAR A:␍Dirección: AV. SAN IGNACIO 1200, Comuna: Quilicura, Ciudad: Santiago, Horario de
+ * Atención: 09:00 - 19:00, CONTACTO: JUAN PÉREZ, FONO: 569..., TRANSPORTE: SAMEX
+ * </pre>
+ *
+ * <p>No tiene parser propio: son etiquetas más ({@code COMUNA:}, {@code CIUDAD:},
+ * {@code TRANSPORTE:}, {@code HORARIO DE ATENCIÓN}) y la comuna y la ciudad se juntan con la
+ * dirección. Así las guías viejas, escritas a mano, se siguen leyendo igual.
+ *
  * <p>Nada de esto es obligatorio. Un pie vacío, o escrito sin ninguna etiqueta conocida,
  * devuelve todo en blanco salvo {@link #otros}, y la sincronización se queda con los campos
  * de siempre ({@code Address2} y {@code Comments}).
  */
 public record FooterDespacho(String direccion, String contacto, String telefono, String horario,
-                             String transportista, String otros) {
+                             String transportista, String otros, boolean despacharA) {
 
     private enum Seccion {
-        DIRECCION, CONTACTO, TELEFONO, HORARIO, OTROS
+        DIRECCION, COMUNA, CIUDAD, CONTACTO, TELEFONO, HORARIO, TRANSPORTE, OTROS
     }
 
     private static final int FLAGS =
@@ -83,6 +100,11 @@ public record FooterDespacho(String direccion, String contacto, String telefono,
             // puntos. Sin eso parten el texto en dos donde no hay nada que partir.
             new Etiqueta("DESPACHO\\s*:", Seccion.DIRECCION),
             new Etiqueta("DIR\\." + FIN, Seccion.DIRECCION),
+            // Las de la plantilla nueva, que sí trae sus dos puntos. Sin ellos, "comuna" o
+            // "transporte" pueden ser parte de la frase ("DESPACHAR A LA COMUNA DE MAIPÚ").
+            new Etiqueta("COMUNA\\s*:", Seccion.COMUNA),
+            new Etiqueta("CIUDAD\\s*:", Seccion.CIUDAD),
+            new Etiqueta("TRANSPORTES?\\s*:", Seccion.TRANSPORTE),
             new Etiqueta("CONTACTOS?" + FIN, Seccion.CONTACTO),
             new Etiqueta("ATENCI[OÓ]N" + FIN, Seccion.CONTACTO),
             new Etiqueta("ENCARGADO\\s*:", Seccion.CONTACTO),
@@ -92,12 +114,18 @@ public record FooterDespacho(String direccion, String contacto, String telefono,
             new Etiqueta("TELS?\\." + FIN, Seccion.TELEFONO),
             new Etiqueta("FONOS?" + FIN, Seccion.TELEFONO),
             new Etiqueta("HORARIOS?\\s+DE\\s+RECEPCI[OÓ]N" + FIN, Seccion.HORARIO),
+            // Antes que HORARIO a secas: si no, "Atención" se lee como la etiqueta del
+            // contacto, el horario queda en "de" y la hora pasa a ser el contacto.
+            new Etiqueta("HORARIOS?\\s+DE\\s+ATENCI[OÓ]N" + FIN, Seccion.HORARIO),
             new Etiqueta("HORARIOS?" + FIN, Seccion.HORARIO),
             new Etiqueta("RECEPCI[OÓ]N\\s*:", Seccion.HORARIO));
 
     private static final Pattern CUALQUIER_ETIQUETA = Pattern.compile(
             "(?<![\\p{L}])(?:" + ETIQUETAS.stream().map(Etiqueta::patron).collect(Collectors.joining("|")) + ")",
             FLAGS);
+
+    /** La etiqueta "DESPACHAR A" (o "DESPACHO EN", "DESPACHAR VÍA SAMEX A"): la primera de la lista. */
+    private static final Pattern DESPACHAR_A = ETIQUETAS.get(0).compilada();
 
     /** "DESPACHAR VÍA SAMEX A": el nombre del transportista queda en el grupo 1. */
     private static final Pattern DESPACHO_VIA = Pattern.compile(
@@ -120,6 +148,7 @@ public record FooterDespacho(String direccion, String contacto, String telefono,
     public static FooterDespacho de(String texto) {
         EnumMap<Seccion, StringBuilder> partes = new EnumMap<>(Seccion.class);
         String transportista = "";
+        boolean despacharA = false;
 
         if (texto != null && !texto.isBlank()) {
             // Antes de la primera etiqueta no se sabe de qué se está hablando; va a "otros",
@@ -131,6 +160,7 @@ public record FooterDespacho(String direccion, String contacto, String telefono,
             while (m.find()) {
                 agregar(partes, actual, valor(texto.substring(desde, m.start())));
                 actual = seccionDe(m.group());
+                despacharA |= DESPACHAR_A.matcher(m.group()).matches();
                 if (transportista.isEmpty()) {
                     transportista = transportistaDe(m.group());
                 }
@@ -140,13 +170,20 @@ public record FooterDespacho(String direccion, String contacto, String telefono,
             recortarHorario(partes);
         }
 
+        // El campo de la plantilla gana: lo escribieron para decir eso y nada más.
+        String transporte = contenido(partes, Seccion.TRANSPORTE);
+        if (!transporte.isEmpty()) {
+            transportista = transporte;
+        }
+
         return new FooterDespacho(
-                contenido(partes, Seccion.DIRECCION),
+                direccionCompleta(partes),
                 contenido(partes, Seccion.CONTACTO),
                 contenido(partes, Seccion.TELEFONO),
                 contenido(partes, Seccion.HORARIO),
                 transportista,
-                contenido(partes, Seccion.OTROS));
+                contenido(partes, Seccion.OTROS),
+                despacharA);
     }
 
     /**
@@ -158,16 +195,42 @@ public record FooterDespacho(String direccion, String contacto, String telefono,
      * guías reales {@code TransportationCode} viene en {@code -1}. El día que empiecen a
      * marcarlo, esto se reemplaza por una condición OData y se acaba la heurística.
      *
-     * <p>Se busca la raíz "retir" en todo el pie. Es deliberadamente simple: las cuatro
-     * formas vistas en producción la comparten, y afinarla más arriesga dejar pasar una.
+     * <p><b>Si dice "DESPACHAR A" con una dirección, es despacho</b> (regla de bodega), y no
+     * se busca nada más: la dirección puede llevar "retir" en el nombre de la calle. El folio
+     * 233 de prueba, a "AV. EL RETIRO 1250, Renca", se saltaba como retiro en local. Sin una
+     * dirección que ubicar, "DESPACHAR A" no dice a dónde, y manda el resto del pie
+     * ("DESPACHAR A: RETIRA EN SUCURSAL", o la plantilla vacía con "TRANSPORTE: RETIRA CLIENTE").
+     *
+     * <p>Fuera de ese caso se busca la raíz "retir" en todo el pie. Es deliberadamente simple:
+     * las cuatro formas vistas en producción la comparten, y afinarla más arriesga dejar pasar
+     * una.
      */
     public boolean esRetiroEnLocal() {
+        if (despacharA && direccionUbicable()) {
+            return false;
+        }
         return RETIRO.matcher(direccion).find()
                 || RETIRO.matcher(otros).find()
-                || RETIRO.matcher(contacto).find();
+                || RETIRO.matcher(contacto).find()
+                || RETIRO.matcher(transportista).find();
     }
 
     private static final Pattern RETIRO = Pattern.compile("\\bretir\\w*", FLAGS);
+
+    /**
+     * Si la guía la lleva uno de estos despachadores externos ("SAMEX"), leído del
+     * {@code TRANSPORTE:} de la plantilla o del "DESPACHAR VÍA SAMEX A" de los pies a mano.
+     *
+     * <p>Va contra una lista y no contra cualquier transporte escrito: el campo puede nombrar
+     * a Calimport, y tomar por externa una guía propia la dejaría fuera de la app sin que
+     * nadie lo note.
+     */
+    public boolean vaPorTransportista(Collection<String> externos) {
+        String transporte = comparable(transportista);
+        return !transporte.isEmpty() && externos.stream()
+                .map(FooterDespacho::comparable)
+                .anyMatch(externo -> !externo.isEmpty() && transporte.contains(externo));
+    }
 
     /** Si el pie no aportó nada que la app pueda usar. */
     public boolean vacio() {
@@ -238,6 +301,41 @@ public record FooterDespacho(String direccion, String contacto, String telefono,
         }
         partes.put(Seccion.HORARIO, new StringBuilder(valor(horario.substring(0, fin))));
         agregar(partes, Seccion.OTROS, valor(horario.substring(fin)));
+    }
+
+    /**
+     * La plantilla nueva parte la dirección en tres etiquetas —"Dirección: AV. SAN IGNACIO
+     * 1200, Comuna: Quilicura, Ciudad: Santiago"— y acá se rearma en una sola, "calle número,
+     * comuna, ciudad", que es la forma que espera el geocodificador: con la etiqueta adentro
+     * buscaría una comuna llamada "Comuna: Quilicura".
+     *
+     * <p>La comuna o la ciudad que ya venían escritas en la dirección no se repiten.
+     */
+    private static String direccionCompleta(EnumMap<Seccion, StringBuilder> partes) {
+        List<String> trozos = new ArrayList<>();
+        for (Seccion seccion : List.of(Seccion.DIRECCION, Seccion.COMUNA, Seccion.CIUDAD)) {
+            String valor = contenido(partes, seccion);
+            if (!valor.isEmpty() && !yaEsta(trozos, valor)) {
+                trozos.add(valor);
+            }
+        }
+        return String.join(", ", trozos);
+    }
+
+    private static boolean yaEsta(List<String> trozos, String valor) {
+        String buscado = comparable(valor);
+        return trozos.stream()
+                .flatMap(trozo -> Arrays.stream(trozo.split(",")))
+                .anyMatch(parte -> comparable(parte).equals(buscado));
+    }
+
+    /** "MAIPÚ." y "Maipu" son la misma comuna; "Samex" y "SAMEX", el mismo transportista. */
+    private static String comparable(String texto) {
+        return Normalizer.normalize(texto, Normalizer.Form.NFD)
+                .replaceAll("\\p{M}", "")
+                .replaceAll("[.\\s]+", " ")
+                .trim()
+                .toLowerCase(Locale.ROOT);
     }
 
     private static void agregar(EnumMap<Seccion, StringBuilder> partes, Seccion seccion, String valor) {

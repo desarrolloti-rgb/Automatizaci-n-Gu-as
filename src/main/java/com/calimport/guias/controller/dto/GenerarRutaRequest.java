@@ -13,12 +13,15 @@ import jakarta.validation.constraints.Size;
  * Lo que manda el bodeguero al asignarle las guías del día a un repartidor.
  *
  * @param horaSalida cambia todos los días, por eso viene en la request y no en configuración
+ * @param vuelveABodega si el plan cuenta el regreso a bodega. Opcional: sin él se usa lo
+ *                      habitual del repartidor, y si viene, queda como su nuevo valor habitual
  */
 public record GenerarRutaRequest(
         @NotNull Integer repartidorId,
         @NotNull LocalDate fecha,
         @NotNull LocalTime horaSalida,
-        @NotEmpty @Size(max = 50) List<@Valid @NotNull GuiaEnRuta> guias) {
+        @NotEmpty @Size(max = 50) List<@Valid @NotNull GuiaEnRuta> guias,
+        Boolean vuelveABodega) {
 
     /**
      * Horario y nota son opcionales: si el bodeguero los carga, mandan sobre el comentario

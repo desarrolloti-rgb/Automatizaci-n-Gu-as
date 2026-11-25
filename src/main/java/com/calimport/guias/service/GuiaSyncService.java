@@ -1,6 +1,7 @@
 package com.calimport.guias.service;
 
 import java.time.LocalDate;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -32,24 +33,33 @@ public class GuiaSyncService {
     private final GuiaService guiaService;
     private final String filtroExtra;
     private final boolean udfEstadoLogistico;
+    private final List<String> transportistasExternos;
 
+    /**
+     * @param transportistasExternos los despachadores externos ("SAMEX") cuyas guías no se
+     *     importan: no las lleva un repartidor de Calimport. Vacío = se importan todas, que
+     *     es como se apaga el filtro cuando esas guías se integren a la app.
+     */
     public GuiaSyncService(SapClient sapClient, GuiaService guiaService,
                             @Value("${guias.sync.filtro-extra:}") String filtroExtra,
-                            @Value("${guias.sap.udf-estado-logistico:false}") boolean udfEstadoLogistico) {
+                            @Value("${guias.sap.udf-estado-logistico:false}") boolean udfEstadoLogistico,
+                            @Value("${guias.sync.transportistas-externos:SAMEX}") List<String> transportistasExternos) {
         this.sapClient = sapClient;
         this.guiaService = guiaService;
         this.filtroExtra = filtroExtra;
         this.udfEstadoLogistico = udfEstadoLogistico;
+        this.transportistasExternos = List.copyOf(transportistasExternos);
     }
 
     /**
      * Cuántas guías se sincronizaron, cuántas filas de SAP se descartaron por venir
-     * incompletas y cuántas se saltaron porque el cliente las retira en local.
+     * incompletas, cuántas se saltaron porque el cliente las retira en local y cuántas
+     * porque las lleva un despachador externo.
      *
-     * <p>Los retiros se cuentan y no se esconden: si el número sorprende, es la señal de
-     * que el filtro se está llevando algo que sí había que despachar.
+     * <p>Las que se saltan se cuentan y no se esconden: si el número sorprende, es la señal
+     * de que el filtro se está llevando algo que sí había que despachar.
      */
-    public record Resultado(int sincronizadas, int descartadas, int retirosEnLocal) {
+    public record Resultado(int sincronizadas, int descartadas, int retirosEnLocal, int porTransportistaExterno) {
     }
 
     public Resultado sincronizarDesde(LocalDate desde) {
@@ -65,17 +75,24 @@ public class GuiaSyncService {
         JsonNode value = respuesta == null ? null : respuesta.get("value");
         if (value == null || !value.isArray()) {
             log.warn("SAP no devolvio un arreglo 'value' al pedir guias desde {}", desde);
-            return new Resultado(0, 0, 0);
+            return new Resultado(0, 0, 0, 0);
         }
 
         List<GuiaSap> guias = new ArrayList<>();
         int descartadas = 0;
         int retiros = 0;
+        int externas = 0;
         for (JsonNode fila : value) {
-            // El retiro en local se mira antes de mapear: esa guia no la lleva nadie, asi
-            // que no tiene sentido ni geocodificarla ni mostrarla en la lista de reparto.
-            if (FooterDespacho.de(textoDe(fila, "ClosingRemarks")).esRetiroEnLocal()) {
+            // El retiro en local y el despachador externo se miran antes de mapear: esas
+            // guias no las lleva un repartidor de Calimport, asi que no tiene sentido ni
+            // geocodificarlas ni mostrarlas en la lista de reparto.
+            FooterDespacho pie = FooterDespacho.de(textoDe(fila, "ClosingRemarks"));
+            if (pie.esRetiroEnLocal()) {
                 retiros++;
+                continue;
+            }
+            if (pie.vaPorTransportista(transportistasExternos)) {
+                externas++;
                 continue;
             }
             GuiaSap guia = mapear(fila);
@@ -90,9 +107,10 @@ public class GuiaSyncService {
             guiaService.sincronizarDesdeSap(guia);
         }
 
-        log.info("Sincronizacion {} a {}: {} guias, {} filas descartadas, {} de retiro en local",
-                desde, hasta == null ? "hoy" : hasta, guias.size(), descartadas, retiros);
-        return new Resultado(guias.size(), descartadas, retiros);
+        log.info("Sincronizacion {} a {}: {} guias, {} filas descartadas, {} de retiro en local, "
+                        + "{} de despachador externo",
+                desde, hasta == null ? "hoy" : hasta, guias.size(), descartadas, retiros, externas);
+        return new Resultado(guias.size(), descartadas, retiros, externas);
     }
 
     /**
@@ -121,7 +139,32 @@ public class GuiaSyncService {
                 recortar(unirLineas(textoDe(fila, "Comments"), " "), 2000),
                 recortar(unirLineas(pie, " "), 2000),
                 recortar(normalizarDireccion(footer.direccion()), 255),
-                recortar(footer.horario(), 255));
+                recortar(footer.horario(), 255),
+                fechaDe(fila, "DocDate"),
+                // Null si viene vacío: una fila sin el campo y una con el campo en blanco son lo mismo.
+                vacioANull(recortar(textoDe(fila, "U_Despachador"), 50)));
+    }
+
+    private static String vacioANull(String texto) {
+        return texto.isEmpty() ? null : texto;
+    }
+
+    /**
+     * Según la versión del Service Layer, DocDate llega como "2026-09-23" o como
+     * "2026-09-23T00:00:00Z"; en los dos casos la fecha son los primeros diez caracteres.
+     * Una fecha ilegible deja null en vez de descartar la guía: ordenar es secundario.
+     */
+    private static LocalDate fechaDe(JsonNode fila, String campo) {
+        String texto = textoDe(fila, campo);
+        if (texto.length() < 10) {
+            return null;
+        }
+        try {
+            return LocalDate.parse(texto.substring(0, 10));
+        } catch (DateTimeParseException e) {
+            log.warn("{} ilegible en la guia {}: {}", campo, fila.get("DocEntry"), texto);
+            return null;
+        }
     }
 
     /**

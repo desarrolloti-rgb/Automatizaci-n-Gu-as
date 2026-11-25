@@ -3,14 +3,22 @@ package com.calimport.guias.sap;
 import java.time.LocalDate;
 import java.util.Map;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
+import org.springframework.web.client.HttpClientErrorException;
 
 import tools.jackson.databind.JsonNode;
 
-/** Solo lo que Guias necesita de SAP por ahora: resolver al repartidor que inicia sesión. */
+/**
+ * Lo que Guías necesita de SAP: el repartidor que inicia sesión, las guías por despachar, su
+ * estado de última milla y el correo del cliente para el aviso de entrega.
+ */
 @Component
 public class SapClient {
+
+    private static final Logger log = LoggerFactory.getLogger(SapClient.class);
 
     private final SapSessionManager sessionManager;
 
@@ -62,6 +70,10 @@ public class SapClient {
         String filter = (filtroExtra == null || filtroExtra.isBlank())
                 ? porFecha
                 : porFecha + " and (" + filtroExtra + ")";
+        // U_Despachador es un UDF, como U_EstadoLog: se pide solo si existen en esta instalacion.
+        // Es donde bodega deja "SAMEX" al crear la guia en SAP.
+        String campos = "DocEntry,FolioNumber,DocDate,CardName,Address,Address2,Comments,ClosingRemarks"
+                + (conEstadoLogistico ? ",U_Despachador" : "");
 
         return sessionManager.executeWithSession(cookie ->
                 sessionManager.getRestClient().get()
@@ -69,9 +81,7 @@ public class SapClient {
                         // ahi viene escrita la direccion de despacho real y el horario de
                         // recepcion. Es campo estandar de SAP, no un UDF, asi que pedirlo no
                         // corre el riesgo del 400 que tienen los U_*.
-                        .uri("/DeliveryNotes?$filter={filter}"
-                           + "&$select=DocEntry,FolioNumber,CardName,Address,Address2,Comments,ClosingRemarks"
-                           + "&$orderby=DocEntry", filter)
+                        .uri("/DeliveryNotes?$filter={filter}&$select=" + campos + "&$orderby=DocEntry", filter)
                         .header("Cookie", cookie)
                         .retrieve()
                         .body(JsonNode.class));
@@ -111,19 +121,68 @@ public class SapClient {
      * {@link java.util.HashMap} y no con {@code Map.of}, que no admite nulls.
      *
      * <p>Service Layer responde 204 sin cuerpo, así que no hay nada que deserializar.
+     *
+     * <p>Ante un 400 se reintenta <b>una vez con una sesión nueva</b>. Una sesión puede
+     * quedar inservible para escribir sin que SAP responda 401: el 28-09-2026, después de
+     * que cambiaron la definición de los UDF en TEST, la sesión abierta de la app recibía
+     * "Could not commit transaction: Error -1" (-1116) en cada PATCH, mientras el mismo
+     * cuerpo exacto pasaba con cualquier sesión nueva. Como solo se renovaba ante 401, la
+     * guía quedó trabada hasta reiniciar la app. El PATCH manda el estado completo, así que
+     * repetirlo es inofensivo; si con sesión nueva también falla, el error es de los datos
+     * y se propaga para que quede para el reintento.
      */
     public void actualizarEstadoLogistico(int docEntry, Map<String, Object> campos) {
-        sessionManager.executeWithSession(cookie -> {
-            sessionManager.getRestClient()
-                    .patch()
-                    .uri("/DeliveryNotes({docEntry})", docEntry)
-                    .header("Cookie", cookie)
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .body(campos)
-                    .retrieve()
-                    .toBodilessEntity();
-            return null;
-        });
+        try {
+            sessionManager.executeWithSession(cookie -> patchEstado(docEntry, campos, cookie));
+        } catch (HttpClientErrorException.BadRequest e) {
+            log.warn("SAP rechazo el estado de DocEntry {} (400); se reintenta una vez con sesion nueva", docEntry);
+            sessionManager.descartarSesion();
+            sessionManager.executeWithSession(cookie -> patchEstado(docEntry, campos, cookie));
+        }
+    }
+
+    private Void patchEstado(int docEntry, Map<String, Object> campos, String cookie) {
+        sessionManager.getRestClient()
+                .patch()
+                .uri("/DeliveryNotes({docEntry})", docEntry)
+                .header("Cookie", cookie)
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(campos)
+                .retrieve()
+                .toBodilessEntity();
+        return null;
+    }
+
+    /**
+     * El cliente ({@code CardCode}) de una guía, para el correo de despacho. Se pide al
+     * enviar y no se guarda en la sincronización: así sirve también para las guías que ya
+     * estaban importadas cuando nació el correo.
+     *
+     * <p>Con {@code $filter} y no {@code DeliveryNotes(docEntry)}: una guía que no está en
+     * SAP (las creadas a mano en la app) da un arreglo vacío en vez de un 404.
+     */
+    public JsonNode fetchClienteDeGuia(int docEntry) {
+        String filter = "DocEntry eq " + docEntry;
+        return sessionManager.executeWithSession(cookie ->
+                sessionManager.getRestClient().get()
+                        .uri("/DeliveryNotes?$filter={filter}&$select=DocEntry,CardCode", filter)
+                        .header("Cookie", cookie)
+                        .retrieve()
+                        .body(JsonNode.class));
+    }
+
+    /**
+     * El correo de la ficha del cliente ({@code EmailAddress}), el mismo que usa la app de
+     * HES para pedirle la HES. Puede traer varios separados por {@code ;} o coma.
+     */
+    public JsonNode fetchCorreoDelCliente(String cardCode) {
+        String filter = "CardCode eq '" + (cardCode == null ? "" : cardCode.replace("'", "''")) + "'";
+        return sessionManager.executeWithSession(cookie ->
+                sessionManager.getRestClient().get()
+                        .uri("/BusinessPartners?$filter={filter}&$select=CardCode,EmailAddress", filter)
+                        .header("Cookie", cookie)
+                        .retrieve()
+                        .body(JsonNode.class));
     }
 
     /** Igual que en Dashboard: busca en EmployeesInfo por eMail, solo activos. */

@@ -1,5 +1,7 @@
 package com.calimport.guias.config;
 
+import java.time.LocalDate;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.ApplicationArguments;
@@ -111,6 +113,9 @@ public class DatosLocales implements ApplicationRunner {
     private void guia(int docEntry, long folio, String cliente, String direccion, String comentario, String pie) {
         Guia guia = new Guia(docEntry, folio, cliente, direccion);
         guia.setComentario(comentario);
+        // Fechas repartidas en la última semana y no en orden de folio, para que ordenar por
+        // fecha en la tabla de bodega se note.
+        guia.setFechaDocumento(LocalDate.now().minusDays((docEntry * 3L) % 7));
         if (pie != null) {
             FooterDespacho footer = FooterDespacho.de(pie);
             guia.setFooter(pie);

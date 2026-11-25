@@ -55,6 +55,18 @@ class OptimizadorLocalTest {
         return guia;
     }
 
+    private static Guia guiaEn(long id, double latitud, double longitud) {
+        Guia guia = guiaAlSur(id, 0);
+        guia.setLatitud(latitud);
+        guia.setLongitud(longitud);
+        return guia;
+    }
+
+    /** Las visitas de una ruta que termina en el último cliente, como la mayoría de las pruebas. */
+    private List<Visita> optimizar(List<Guia> guias) {
+        return optimizador.optimizar(FECHA, SALIDA, false, guias).visitas();
+    }
+
     private static List<Long> orden(List<Visita> visitas) {
         return visitas.stream().map(Visita::guiaId).toList();
     }
@@ -67,12 +79,12 @@ class OptimizadorLocalTest {
     void sinHorariosVaDeLaMasCercanaALaMasLejana() {
         List<Guia> guias = List.of(guiaAlSur(1, 6), guiaAlSur(2, 2), guiaAlSur(3, 4));
 
-        assertEquals(List.of(2L, 3L, 1L), orden(optimizador.optimizar(FECHA, SALIDA, guias)));
+        assertEquals(List.of(2L, 3L, 1L), orden(optimizar(guias)));
     }
 
     @Test
     void laLlegadaSumaViajeYTiempoDeDescarga() {
-        List<Visita> visitas = optimizador.optimizar(FECHA, SALIDA, List.of(guiaAlSur(1, 1), guiaAlSur(2, 2)));
+        List<Visita> visitas = optimizar(List.of(guiaAlSur(1, 1), guiaAlSur(2, 2)));
 
         // 1,112 km x 1,35 a 25 km/h = 3,6 min de viaje entre cada punto.
         double viaje = KM_POR_CENTESIMA * OptimizadorLocal.FACTOR_CALLES / 25 * 60;
@@ -88,7 +100,7 @@ class OptimizadorLocalTest {
         Guia lejanaQueCierra = guiaAlSur(2, 8);
         lejanaQueCierra.setVentanaHasta(LocalTime.of(9, 30));
 
-        List<Visita> visitas = optimizador.optimizar(FECHA, SALIDA, List.of(cercana, lejanaQueCierra));
+        List<Visita> visitas = optimizar(List.of(cercana, lejanaQueCierra));
 
         assertEquals(List.of(2L, 1L), orden(visitas));
         assertTrue(hora(visitas.get(0)).isBefore(LocalTime.of(9, 30)));
@@ -99,7 +111,7 @@ class OptimizadorLocalTest {
         Guia abreTarde = guiaAlSur(1, 1);
         abreTarde.setVentanaDesde(LocalTime.of(11, 0));
 
-        List<Visita> visitas = optimizador.optimizar(FECHA, SALIDA, List.of(abreTarde));
+        List<Visita> visitas = optimizar(List.of(abreTarde));
 
         assertEquals(LocalTime.of(11, 0), hora(visitas.get(0)));
     }
@@ -112,7 +124,7 @@ class OptimizadorLocalTest {
         Guia cierraTemprano = guiaAlSur(2, 3);
         cierraTemprano.setVentanaHasta(LocalTime.of(11, 0));
 
-        List<Visita> visitas = optimizador.optimizar(FECHA, SALIDA, List.of(abreAlMediodia, cierraTemprano, guiaAlSur(3, 2)));
+        List<Visita> visitas = optimizar(List.of(abreAlMediodia, cierraTemprano, guiaAlSur(3, 2)));
 
         assertEquals(1L, visitas.get(visitas.size() - 1).guiaId());
         visitas.forEach(v -> assertTrue(v.guiaId() != 2L || hora(v).isBefore(LocalTime.of(11, 0))));
@@ -124,7 +136,7 @@ class OptimizadorLocalTest {
         Guia yaCerro = guiaAlSur(1, 2);
         yaCerro.setVentanaHasta(LocalTime.of(8, 0));
 
-        assertEquals(List.of(1L, 2L), orden(optimizador.optimizar(FECHA, SALIDA, List.of(yaCerro, guiaAlSur(2, 4)))));
+        assertEquals(List.of(1L, 2L), orden(optimizar(List.of(yaCerro, guiaAlSur(2, 4)))));
     }
 
     @Test
@@ -136,7 +148,7 @@ class OptimizadorLocalTest {
             guias.add(guiaAlSur(i + 1, centesimas[i]));
         }
 
-        List<Long> ordenado = orden(optimizador.optimizar(FECHA, SALIDA, guias));
+        List<Long> ordenado = orden(optimizar(guias));
 
         assertEquals(List.of(2L, 6L, 4L, 8L, 5L, 9L, 3L, 7L, 1L), ordenado);
     }
@@ -158,7 +170,7 @@ class OptimizadorLocalTest {
         }
 
         long inicio = System.nanoTime();
-        List<Visita> visitas = optimizador.optimizar(FECHA, SALIDA, guias);
+        List<Visita> visitas = optimizar(guias);
         long milis = Duration.ofNanos(System.nanoTime() - inicio).toMillis();
 
         assertEquals(50, visitas.size());
@@ -167,8 +179,48 @@ class OptimizadorLocalTest {
     }
 
     @Test
+    void conVueltaABodegaTerminaCercaDeLaBodegaYSinVueltaEnLoMasLejano() {
+        // Dos clientes a ~1 km de la bodega (este y oeste) y uno a ~10 km al sur. Sin vuelta
+        // conviene dejar el lejano para el final; con vuelta, eso obligaría a volver 10 km, así
+        // que el recorrido baja por un lado y sube por el otro, terminando junto a la bodega.
+        Guia lejana = guiaEn(1, BODEGA_LAT - 0.09, BODEGA_LNG);
+        Guia este = guiaEn(2, BODEGA_LAT, BODEGA_LNG + 0.01);
+        Guia oeste = guiaEn(3, BODEGA_LAT, BODEGA_LNG - 0.01);
+        List<Guia> guias = List.of(lejana, este, oeste);
+
+        List<Visita> sinVuelta = optimizador.optimizar(FECHA, SALIDA, false, guias).visitas();
+        List<Visita> conVuelta = optimizador.optimizar(FECHA, SALIDA, true, guias).visitas();
+
+        assertEquals(1L, sinVuelta.get(2).guiaId());
+        assertEquals(1L, conVuelta.get(1).guiaId(), "la lejana va al medio, no al final");
+    }
+
+    @Test
+    void elPlanTraeLosKmYElTerminoYLaVueltaLosSuma() {
+        Guia guia = guiaAlSur(1, 1);
+        double km = KM_POR_CENTESIMA * OptimizadorLocal.FACTOR_CALLES;
+        double viaje = km / 25 * 60;
+        Instant salida = FECHA.atTime(SALIDA).atZone(CHILE).toInstant();
+
+        OptimizadorRutas.Plan sinVuelta = optimizador.optimizar(FECHA, SALIDA, false, List.of(guia));
+        OptimizadorRutas.Plan conVuelta = optimizador.optimizar(FECHA, SALIDA, true, List.of(guia));
+
+        // Sin vuelta termina al salir del cliente: viaje + 10 min de descarga.
+        assertEquals(km, sinVuelta.kilometros(), 0.01);
+        assertEquals(viaje + 10, minutosEntre(salida, sinVuelta.termino()), 0.1);
+        // Con vuelta suma el regreso: el doble de km y otro viaje.
+        assertEquals(2 * km, conVuelta.kilometros(), 0.01);
+        assertEquals(viaje + 10 + viaje, minutosEntre(salida, conVuelta.termino()), 0.1);
+        // La llegada al cliente es la misma: la vuelta solo cambia lo que viene después.
+        assertEquals(sinVuelta.visitas(), conVuelta.visitas());
+    }
+
+    @Test
     void sinGuiasNoHayVisitas() {
-        assertEquals(List.of(), optimizador.optimizar(FECHA, SALIDA, List.of()));
+        OptimizadorRutas.Plan plan = optimizador.optimizar(FECHA, SALIDA, true, List.of());
+
+        assertEquals(List.of(), plan.visitas());
+        assertEquals(0.0, plan.kilometros());
     }
 
     @Test
@@ -176,7 +228,7 @@ class OptimizadorLocalTest {
         Guia sinUbicar = guiaAlSur(1, 1);
         sinUbicar.setLatitud(null);
 
-        assertThrows(IllegalStateException.class, () -> optimizador.optimizar(FECHA, SALIDA, List.of(sinUbicar)));
+        assertThrows(IllegalStateException.class, () -> optimizar(List.of(sinUbicar)));
     }
 
     @Test

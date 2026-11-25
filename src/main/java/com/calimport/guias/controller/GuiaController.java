@@ -23,6 +23,7 @@ import com.calimport.guias.controller.dto.AsignarRepartidorRequest;
 import com.calimport.guias.controller.dto.CrearGuiaRequest;
 import com.calimport.guias.controller.dto.DefinirDireccionRequest;
 import com.calimport.guias.controller.dto.DefinirHorarioRequest;
+import com.calimport.guias.controller.dto.DefinirTransportistaRequest;
 import com.calimport.guias.controller.dto.EntregaRequest;
 import com.calimport.guias.controller.dto.RechazoRequest;
 import com.calimport.guias.model.EstadoGuia;
@@ -109,13 +110,27 @@ public class GuiaController {
         return guiaService.crear(request.docEntry(), request.folio(), request.cliente(), request.direccion());
     }
 
+    /**
+     * Asigna, cambia o quita ({@code "repartidorId": null}) el repartidor de una guía
+     * pendiente. Si el anterior ya la había retirado, vuelve a "por retirar".
+     */
     @PatchMapping("/{id}/repartidor")
     @PreAuthorize("hasRole('JEFE_BODEGA')")
     public Guia asignarRepartidor(@PathVariable Long id, @RequestBody AsignarRepartidorRequest request) {
-        return guiaService.asignarRepartidor(id, request.repartidorId());
+        return guiaService.reasignar(id, request.repartidorId());
     }
 
     /** El bodeguero fija o corrige el horario de recepción. Manda sobre el comentario de SAP. */
+    /**
+     * Marca la guía como despacho externo ({@code "transportista": "SAMEX"}) o le quita la marca
+     * ({@code null}). Es la otra opción del selector del repartidor: una guía tiene uno u otro.
+     */
+    @PatchMapping("/{id}/transportista")
+    @PreAuthorize("hasRole('JEFE_BODEGA')")
+    public Guia definirTransportista(@PathVariable Long id, @RequestBody DefinirTransportistaRequest request) {
+        return guiaService.definirTransportista(id, request.transportista());
+    }
+
     @PatchMapping("/{id}/horario")
     @PreAuthorize("hasRole('JEFE_BODEGA')")
     public Guia definirHorario(@PathVariable Long id, @RequestBody DefinirHorarioRequest request) {

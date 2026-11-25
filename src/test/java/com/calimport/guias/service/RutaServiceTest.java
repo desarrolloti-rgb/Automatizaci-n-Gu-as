@@ -21,6 +21,7 @@ import org.springframework.transaction.support.TransactionOperations;
 import com.calimport.guias.config.RutasConfig;
 import com.calimport.guias.controller.dto.GenerarRutaRequest;
 import com.calimport.guias.controller.dto.GenerarRutaRequest.GuiaEnRuta;
+import com.calimport.guias.controller.dto.OdometroRequest;
 import com.calimport.guias.controller.dto.RutaResponse;
 import com.calimport.guias.model.EstadoGuia;
 import com.calimport.guias.model.Guia;
@@ -30,11 +31,14 @@ import com.calimport.guias.model.Ruta;
 import com.calimport.guias.repository.RutaRepository;
 import com.calimport.guias.service.Geocodificador.Ubicacion;
 import com.calimport.guias.service.InterpreteComentarios.Interpretacion;
+import com.calimport.guias.service.OptimizadorRutas.Plan;
 import com.calimport.guias.service.OptimizadorRutas.Visita;
 import com.calimport.guias.utils.ApiException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -121,9 +125,16 @@ class RutaServiceTest {
     }
 
     private static GenerarRutaRequest request(Long... ids) {
-        return new GenerarRutaRequest(REPARTIDOR, FECHA, SALIDA,
-                java.util.Arrays.stream(ids).map(id -> new GuiaEnRuta(id, null, null, null)).toList());
+        return requestConVuelta(null, ids);
     }
+
+    private static GenerarRutaRequest requestConVuelta(Boolean vuelveABodega, Long... ids) {
+        return new GenerarRutaRequest(REPARTIDOR, FECHA, SALIDA,
+                java.util.Arrays.stream(ids).map(id -> new GuiaEnRuta(id, null, null, null)).toList(), vuelveABodega);
+    }
+
+    /** Termina a las 13:10 en Chile con 12,34 km. */
+    private static final Instant TERMINO = Instant.parse("2026-09-15T16:10:00Z");
 
     private void optimizadorDevuelve(long... ordenIds) {
         List<Visita> visitas = new java.util.ArrayList<>();
@@ -132,7 +143,8 @@ class RutaServiceTest {
             visitas.add(new Visita(id, llegada));
             llegada = llegada.plusSeconds(1800);
         }
-        when(optimizadorRutas.optimizar(eq(FECHA), eq(SALIDA), any())).thenReturn(visitas);
+        when(optimizadorRutas.optimizar(eq(FECHA), eq(SALIDA), anyBoolean(), any()))
+                .thenReturn(new Plan(visitas, 12.34, TERMINO));
     }
 
     @Test
@@ -150,7 +162,64 @@ class RutaServiceTest {
         assertEquals(1, ruta.tramosGoogleMaps().size());
         assertTrue(ruta.paradas().get(0).wazeUrl().startsWith("https://waze.com/ul?ll="));
         guias.values().forEach(g -> assertEquals(REPARTIDOR, g.getRepartidorId()));
-        verify(rutaRepository).borrarRuta(REPARTIDOR, FECHA);
+        verify(rutaRepository).borrarParadasPrevias(List.of(1L, 2L, 3L), REPARTIDOR, FECHA);
+    }
+
+    @Test
+    void laRutaGuardaElPlanDelOptimizadorYLoDevuelve() {
+        guiaUbicada(1);
+        optimizadorDevuelve(1);
+
+        RutaResponse ruta = service.generar(request(1L));
+
+        assertEquals(12.3, ruta.kmPlanificados());
+        assertEquals(LocalTime.of(13, 10), ruta.terminoEstimado());
+        // De las 09:30 a las 13:10.
+        assertEquals(220, ruta.minutosPlanificados());
+    }
+
+    @Test
+    void sinIndicarLaVueltaSeUsaLoHabitualDelRepartidor() {
+        guiaUbicada(1);
+        optimizadorDevuelve(1);
+        repartidorService.obtenerPorId(REPARTIDOR).setVuelveABodega(true);
+
+        RutaResponse ruta = service.generar(request(1L));
+
+        assertTrue(ruta.vuelveABodega());
+        verify(optimizadorRutas).optimizar(eq(FECHA), eq(SALIDA), eq(true), any());
+        verify(repartidorService, never()).recordarVuelta(anyInt(), anyBoolean());
+    }
+
+    @Test
+    void laVueltaQueMarcaBodegaQuedaComoLoHabitualDelRepartidor() {
+        guiaUbicada(1);
+        optimizadorDevuelve(1);
+        repartidorService.obtenerPorId(REPARTIDOR).setVuelveABodega(true);
+
+        RutaResponse ruta = service.generar(requestConVuelta(false, 1L));
+
+        assertFalse(ruta.vuelveABodega());
+        verify(optimizadorRutas).optimizar(eq(FECHA), eq(SALIDA), eq(false), any());
+        verify(repartidorService).recordarVuelta(REPARTIDOR, false);
+    }
+
+    @Test
+    void regenerarReplanificaLaMismaRutaEnVezDeBorrarla() {
+        // La ruta es lo que se mide: si se borrara, se perdería lo ya medido de ella.
+        guiaUbicada(1);
+        guiaUbicada(2);
+        Ruta existente = new Ruta(REPARTIDOR, FECHA, LocalTime.of(8, 0));
+        existente.setId(55L);
+        when(rutaRepository.findByRepartidorIdAndFecha(REPARTIDOR, FECHA)).thenReturn(Optional.of(existente));
+        optimizadorDevuelve(2, 1);
+
+        RutaResponse ruta = service.generar(request(1L, 2L));
+
+        assertEquals(55L, ruta.id());
+        assertEquals(SALIDA, ruta.horaSalida());
+        assertEquals(List.of(2L, 1L), ruta.paradas().stream().map(RutaResponse.Parada::guiaId).toList());
+        verify(rutaRepository).save(existente);
     }
 
     @Test
@@ -194,7 +263,7 @@ class RutaServiceTest {
 
         assertEquals(HttpStatus.UNPROCESSABLE_CONTENT, e.getStatus());
         assertTrue(e.getMessage().contains("1001"));
-        verify(optimizadorRutas, never()).optimizar(any(), any(), any());
+        verify(optimizadorRutas, never()).optimizar(any(), any(), anyBoolean(), any());
         verify(guiaService, never()).asignarRepartidor(anyLong(), anyInt());
     }
 
@@ -281,7 +350,7 @@ class RutaServiceTest {
         optimizadorDevuelve(1);
 
         service.generar(new GenerarRutaRequest(REPARTIDOR, FECHA, SALIDA,
-                List.of(new GuiaEnRuta(1L, LocalTime.of(15, 0), null, null))));
+                List.of(new GuiaEnRuta(1L, LocalTime.of(15, 0), null, null)), null));
 
         verify(guiaService).definirHorario(1L, LocalTime.of(15, 0), null, null);
         verify(interpreteComentarios, never()).interpretar(any());
@@ -304,7 +373,7 @@ class RutaServiceTest {
     @Test
     void siFallaElOptimizadorNoSeAsignaNada() {
         guiaUbicada(1);
-        when(optimizadorRutas.optimizar(any(), any(), any())).thenThrow(new IllegalStateException("timeout"));
+        when(optimizadorRutas.optimizar(any(), any(), anyBoolean(), any())).thenThrow(new IllegalStateException("timeout"));
 
         ApiException e = assertThrows(ApiException.class, () -> service.generar(request(1L)));
 
@@ -320,6 +389,20 @@ class RutaServiceTest {
         ApiException e = assertThrows(ApiException.class, () -> service.generar(request(1L)));
 
         assertEquals(HttpStatus.CONFLICT, e.getStatus());
+    }
+
+    @Test
+    void rechazaUnaGuiaQueVaPorSamexAntesDeLlamarAFuera() {
+        guiaUbicada(1);
+        guiaUbicada(2).setTransportista("SAMEX");
+
+        ApiException e = assertThrows(ApiException.class, () -> service.generar(request(1L, 2L)));
+
+        // La lleva Samex: ni se ubica ni se ordena, y nada queda asignado.
+        assertEquals(HttpStatus.CONFLICT, e.getStatus());
+        assertTrue(e.getMessage().contains("1002"), e.getMessage());
+        verify(optimizadorRutas, never()).optimizar(any(), any(), anyBoolean(), any());
+        verify(guiaService, never()).asignarRepartidor(anyLong(), anyInt());
     }
 
     @Test
@@ -370,5 +453,160 @@ class RutaServiceTest {
         assertEquals(15, ruta.paradas().size());
         assertEquals(2, ruta.tramosGoogleMaps().size());
         assertFalse(ruta.paradas().stream().anyMatch(RutaResponse.Parada::fueraDeHorario));
+    }
+
+    @Test
+    void conVueltaElLinkDeGoogleMapsTerminaEnLaBodega() {
+        // El plan cuenta el regreso: si el link terminara en el último cliente, Maps
+        // mostraría menos km que el plan.
+        guiaUbicada(1);
+        guiaUbicada(2);
+        optimizadorDevuelve(1, 2);
+
+        RutaResponse ruta = service.generar(requestConVuelta(true, 1L, 2L));
+
+        assertEquals(List.of("https://www.google.com/maps/dir/?api=1&origin=-33.400000,-70.600000"
+                + "&destination=-33.400000,-70.600000&travelmode=driving"
+                + "&waypoints=-33.010000,-70.000000%7C-33.020000,-70.000000"), ruta.tramosGoogleMaps());
+        // La bodega va solo en el link: no es una parada.
+        assertEquals(2, ruta.paradas().size());
+    }
+
+    @Test
+    void sinVueltaElLinkDeGoogleMapsTerminaEnElUltimoCliente() {
+        guiaUbicada(1);
+        guiaUbicada(2);
+        optimizadorDevuelve(1, 2);
+
+        RutaResponse ruta = service.generar(requestConVuelta(false, 1L, 2L));
+
+        assertEquals(List.of("https://www.google.com/maps/dir/?api=1&origin=-33.400000,-70.600000"
+                + "&destination=-33.020000,-70.000000&travelmode=driving"
+                + "&waypoints=-33.010000,-70.000000"), ruta.tramosGoogleMaps());
+    }
+
+    @Test
+    void conVueltaYDiezParadasElRegresoVaEnUnTramoAparte() {
+        Long[] ids = new Long[10];
+        long[] orden = new long[10];
+        for (int i = 0; i < 10; i++) {
+            guiaUbicada(i + 1);
+            ids[i] = (long) (i + 1);
+            orden[i] = i + 1;
+        }
+        optimizadorDevuelve(orden);
+
+        RutaResponse ruta = service.generar(requestConVuelta(true, ids));
+
+        assertEquals(2, ruta.tramosGoogleMaps().size());
+        assertEquals("https://www.google.com/maps/dir/?api=1&origin=-33.100000,-70.000000"
+                + "&destination=-33.400000,-70.600000&travelmode=driving", ruta.tramosGoogleMaps().get(1));
+    }
+
+    // --- Kilometraje real: el odómetro que anota el repartidor ------------------------
+
+    private Ruta rutaDeHoy() {
+        LocalDate hoy = LocalDate.now(config.zona());
+        Ruta ruta = new Ruta(REPARTIDOR, hoy, SALIDA);
+        ruta.setId(60L);
+        when(rutaRepository.findByRepartidorIdAndFecha(REPARTIDOR, hoy)).thenReturn(Optional.of(ruta));
+        return ruta;
+    }
+
+    @Test
+    void elRepartidorAnotaElOdometroAlSalirEnSuRutaDeHoy() {
+        Ruta ruta = rutaDeHoy();
+
+        RutaResponse respuesta = service.anotarOdometro(REPARTIDOR, new OdometroRequest(12340, null));
+
+        assertEquals(12340, respuesta.odometroSalida());
+        assertNotNull(respuesta.odometroSalidaHora());
+        assertNull(respuesta.odometroTermino());
+        assertNull(respuesta.odometroTerminoHora());
+        verify(rutaRepository).save(ruta);
+    }
+
+    @Test
+    void alAnotarElTerminoSeConservaLaLecturaDeSalida() {
+        Ruta ruta = rutaDeHoy();
+        Instant anotadaAlSalir = Instant.parse("2026-09-15T12:50:00Z");
+        ruta.anotarOdometroSalida(12340, anotadaAlSalir);
+
+        RutaResponse respuesta = service.anotarOdometro(REPARTIDOR, new OdometroRequest(null, 12403));
+
+        assertEquals(12340, respuesta.odometroSalida());
+        assertEquals(12403, respuesta.odometroTermino());
+        // Cuándo se anotó la salida es su respaldo: anotar el término no lo toca.
+        assertEquals(anotadaAlSalir, ruta.getOdometroSalidaEn());
+        assertNotNull(ruta.getOdometroTerminoEn());
+    }
+
+    @Test
+    void elOdometroAlTerminarNoPuedeSerMenorQueAlSalir() {
+        Ruta ruta = rutaDeHoy();
+        ruta.anotarOdometroSalida(12340, Instant.now());
+
+        ApiException e = assertThrows(ApiException.class,
+                () -> service.anotarOdometro(REPARTIDOR, new OdometroRequest(null, 12300)));
+
+        assertEquals(HttpStatus.BAD_REQUEST, e.getStatus());
+        assertNull(ruta.getOdometroTermino());
+        verify(rutaRepository, never()).save(any());
+    }
+
+    @Test
+    void corregirLaSalidaPorEncimaDelTerminoTambienSeRechaza() {
+        Ruta ruta = rutaDeHoy();
+        ruta.anotarOdometroSalida(12340, Instant.now());
+        ruta.anotarOdometroTermino(12403, Instant.now());
+
+        ApiException e = assertThrows(ApiException.class,
+                () -> service.anotarOdometro(REPARTIDOR, new OdometroRequest(12500, null)));
+
+        assertEquals(HttpStatus.BAD_REQUEST, e.getStatus());
+        assertEquals(12340, ruta.getOdometroSalida());
+    }
+
+    @Test
+    void masDeQuinientosKmEnElDiaEsUnNumeroMalEscrito() {
+        // 12.403 con un dígito de más: es un error al escribir, ninguna ruta de reparto llega a eso.
+        rutaDeHoy().anotarOdometroSalida(12340, Instant.now());
+
+        ApiException e = assertThrows(ApiException.class,
+                () -> service.anotarOdometro(REPARTIDOR, new OdometroRequest(null, 124030)));
+
+        assertEquals(HttpStatus.BAD_REQUEST, e.getStatus());
+    }
+
+    @Test
+    void sinNingunaLecturaNoHayNadaQueAnotar() {
+        rutaDeHoy();
+
+        ApiException e = assertThrows(ApiException.class,
+                () -> service.anotarOdometro(REPARTIDOR, new OdometroRequest(null, null)));
+
+        assertEquals(HttpStatus.BAD_REQUEST, e.getStatus());
+    }
+
+    @Test
+    void sinRutaParaHoyNoSeAnotaElOdometro() {
+        ApiException e = assertThrows(ApiException.class,
+                () -> service.anotarOdometro(REPARTIDOR, new OdometroRequest(12340, null)));
+
+        assertEquals(HttpStatus.NOT_FOUND, e.getStatus());
+    }
+
+    @Test
+    void regenerarLaRutaConservaElKilometrajeAnotado() {
+        // Bodega puede regenerar a media mañana, con el repartidor ya en la calle.
+        guiaUbicada(1);
+        Ruta existente = new Ruta(REPARTIDOR, FECHA, LocalTime.of(8, 0));
+        existente.anotarOdometroSalida(12340, Instant.now());
+        when(rutaRepository.findByRepartidorIdAndFecha(REPARTIDOR, FECHA)).thenReturn(Optional.of(existente));
+        optimizadorDevuelve(1);
+
+        RutaResponse ruta = service.generar(request(1L));
+
+        assertEquals(12340, ruta.odometroSalida());
     }
 }

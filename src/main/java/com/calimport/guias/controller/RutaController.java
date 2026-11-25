@@ -6,6 +6,7 @@ import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -13,6 +14,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.calimport.guias.controller.dto.GenerarRutaRequest;
+import com.calimport.guias.controller.dto.OdometroRequest;
 import com.calimport.guias.controller.dto.RutaResponse;
 import com.calimport.guias.security.UsuarioActual;
 import com.calimport.guias.service.RutaService;
@@ -56,5 +58,15 @@ public class RutaController {
             Authentication authentication) {
         int employeeId = UsuarioActual.de(authentication).employeeId();
         return rutaService.obtener(employeeId, fecha != null ? fecha : LocalDate.now());
+    }
+
+    /**
+     * El repartidor anota lo que marca el odómetro al salir o al terminar, en su ruta de hoy:
+     * es el kilometraje real contra el que bodega compara el plan.
+     */
+    @PatchMapping("/mia/odometro")
+    @PreAuthorize("hasRole('Despachador')")
+    public RutaResponse anotarOdometro(@RequestBody @Valid OdometroRequest request, Authentication authentication) {
+        return rutaService.anotarOdometro(UsuarioActual.de(authentication).employeeId(), request);
     }
 }

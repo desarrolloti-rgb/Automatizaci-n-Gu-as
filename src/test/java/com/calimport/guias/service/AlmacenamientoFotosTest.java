@@ -30,7 +30,13 @@ class AlmacenamientoFotosTest {
 
     @BeforeEach
     void setUp() {
-        almacenamiento = new AlmacenamientoFotos(directorio.toString());
+        almacenamiento = new AlmacenamientoFotos(new DepositoFotosDisco(directorio.toString()));
+    }
+
+    @Test
+    void laRutaPublicaApuntaALaMismaFotoSinToken() {
+        assertEquals("/api/evidencia/guia-12-abc.jpg", AlmacenamientoFotos.rutaPublica("/api/fotos/guia-12-abc.jpg"));
+        assertEquals(null, AlmacenamientoFotos.rutaPublica("https://otro.cl/foto.jpg"));
     }
 
     @Test
@@ -91,5 +97,51 @@ class AlmacenamientoFotosTest {
     @Test
     void unNombreValidoQueNoExisteDevuelveVacio() {
         assertTrue(almacenamiento.leer("guia-1-00000000-0000-0000-0000-000000000000.jpg").isEmpty());
+    }
+
+    // --- PDF de un transportista externo (el albarán de Samex) ---
+
+    /** Cabecera real de un PDF seguida de bytes cualquiera. */
+    static final byte[] PDF = "%PDF-1.4\n%prueba".getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+
+    @Test
+    void guardaElPdfConSuHashYLoSirveComoPdf() throws Exception {
+        FotoGuardada guardada = almacenamiento.guardarPdf(12L, PDF);
+
+        assertTrue(guardada.urlFoto().matches("/api/fotos/guia-12-[0-9a-f-]{36}\\.pdf"), guardada.urlFoto());
+        String nombre = guardada.urlFoto().substring("/api/fotos/".length());
+        assertArrayEquals(PDF, Files.readAllBytes(directorio.resolve(nombre)));
+        assertEquals(AlmacenamientoFotos.sha256(PDF), guardada.hashFoto());
+        Foto leida = almacenamiento.leer(nombre).orElseThrow();
+        assertEquals(MediaType.APPLICATION_PDF, leida.tipo());
+        // Y tiene su link sin token, el que va a U_UrlFoto.
+        assertEquals("/api/evidencia/" + nombre, AlmacenamientoFotos.rutaPublica(guardada.urlFoto()));
+    }
+
+    @Test
+    void unaImagenNoPasaComoPdf() {
+        // Lo que manda es el contenido: un JPEG que el lector mande como PDF no se guarda.
+        ApiException e = assertThrows(ApiException.class, () -> almacenamiento.guardarPdf(12L, JPEG));
+
+        assertEquals(HttpStatus.BAD_REQUEST, e.getStatus());
+    }
+
+    @Test
+    void unPdfVacioOMasGrandeQueElTopeNoSeGuarda() {
+        byte[] enorme = new byte[AlmacenamientoFotos.TOPE_PDF + 1];
+        System.arraycopy(PDF, 0, enorme, 0, PDF.length);
+
+        assertEquals(HttpStatus.BAD_REQUEST,
+                assertThrows(ApiException.class, () -> almacenamiento.guardarPdf(12L, new byte[0])).getStatus());
+        assertEquals(HttpStatus.BAD_REQUEST,
+                assertThrows(ApiException.class, () -> almacenamiento.guardarPdf(12L, enorme)).getStatus());
+    }
+
+    @Test
+    void elRepartidorSigueSinPoderSubirUnPdfComoFoto() {
+        // Las fotos de entrega siguen siendo solo imágenes; el PDF entra solo por el lector.
+        ApiException e = assertThrows(ApiException.class, () -> almacenamiento.guardar(12L, PDF));
+
+        assertEquals(HttpStatus.BAD_REQUEST, e.getStatus());
     }
 }

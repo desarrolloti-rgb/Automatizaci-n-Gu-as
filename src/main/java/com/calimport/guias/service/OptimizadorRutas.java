@@ -14,6 +14,10 @@ import com.calimport.guias.model.Guia;
  * defecto) o {@code google} (Route Optimization API, pagada). Las dos tratan el horario de
  * recepción como ventana <b>blanda</b>: llegar fuera de horario cuesta caro, pero la guía
  * nunca queda fuera de la ruta.
+ *
+ * <p><b>La vuelta a bodega</b> es opcional porque uno de los repartidores vuelve al terminar y
+ * el otro no. Sin ella la ruta termina en el último cliente; con ella el tramo de regreso entra
+ * al costo, así que el recorrido se ordena para terminar cerca de la bodega.
  */
 public interface OptimizadorRutas {
 
@@ -21,8 +25,16 @@ public interface OptimizadorRutas {
     }
 
     /**
-     * @param guias todas con coordenadas
-     * @return las guías en el orden de visita, con la hora estimada de llegada a cada una
+     * @param visitas las guías en el orden de visita, con la hora estimada de llegada a cada una
+     * @param kilometros del recorrido completo, con la vuelta si la hay; null si el optimizador no lo informó
+     * @param termino cuándo termina: al salir del último cliente, o al llegar a bodega si vuelve;
+     *                null si el optimizador no lo informó
      */
-    List<Visita> optimizar(LocalDate fecha, LocalTime horaSalida, List<Guia> guias);
+    record Plan(List<Visita> visitas, Double kilometros, Instant termino) {
+    }
+
+    /**
+     * @param guias todas con coordenadas
+     */
+    Plan optimizar(LocalDate fecha, LocalTime horaSalida, boolean vuelveABodega, List<Guia> guias);
 }

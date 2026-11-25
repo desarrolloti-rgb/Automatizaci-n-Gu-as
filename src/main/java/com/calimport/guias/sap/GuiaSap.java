@@ -1,5 +1,7 @@
 package com.calimport.guias.sap;
 
+import java.time.LocalDate;
+
 import com.calimport.guias.model.OrigenDireccion;
 
 /**
@@ -21,8 +23,33 @@ import com.calimport.guias.model.OrigenDireccion;
  * El pie crudo viaja aparte en {@link #footer}, junto con lo que se leyó de él
  * ({@link #direccionFooter}, {@link #horarioFooter}): es el respaldo que le permite a
  * bodega contrastar lo que la app entendió con lo que el documento dice.
+ *
+ * <p>{@link #fechaDocumento} es el {@code DocDate}: cuándo se creó la guía. Null si SAP no
+ * lo trae o no se pudo leer.
+ *
+ * <p>{@link #despachador} es el {@code U_Despachador} que trae el documento: al crear la guía
+ * en SAP se puede dejar ahí "SAMEX", y la app la marca como despacho externo al sincronizarla.
+ * Null si el campo viene vacío o si no se pidió (los UDF de estado apagados).
  */
 public record GuiaSap(int docEntry, Long folio, String cliente,
                       String direccion, OrigenDireccion origenDireccion, String comentario,
-                      String footer, String direccionFooter, String horarioFooter) {
+                      String footer, String direccionFooter, String horarioFooter,
+                      LocalDate fechaDocumento, String despachador) {
+
+    /** Sin despachador. */
+    public GuiaSap(int docEntry, Long folio, String cliente,
+                   String direccion, OrigenDireccion origenDireccion, String comentario,
+                   String footer, String direccionFooter, String horarioFooter,
+                   LocalDate fechaDocumento) {
+        this(docEntry, folio, cliente, direccion, origenDireccion, comentario,
+                footer, direccionFooter, horarioFooter, fechaDocumento, null);
+    }
+
+    /** Sin fecha del documento ni despachador. */
+    public GuiaSap(int docEntry, Long folio, String cliente,
+                   String direccion, OrigenDireccion origenDireccion, String comentario,
+                   String footer, String direccionFooter, String horarioFooter) {
+        this(docEntry, folio, cliente, direccion, origenDireccion, comentario,
+                footer, direccionFooter, horarioFooter, null, null);
+    }
 }
