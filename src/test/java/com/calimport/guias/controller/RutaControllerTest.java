@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
@@ -16,9 +17,12 @@ import org.springframework.test.web.servlet.MockMvc;
 import com.calimport.guias.controller.dto.GenerarRutaRequest;
 import com.calimport.guias.controller.dto.OdometroRequest;
 import com.calimport.guias.controller.dto.RutaResponse;
+import com.calimport.guias.controller.dto.RutaResumen;
+import com.calimport.guias.model.EstadoRuta;
 import com.calimport.guias.model.Rol;
 import com.calimport.guias.security.JwtTokenProvider;
 import com.calimport.guias.service.RutaService;
+import com.calimport.guias.utils.ApiException;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -57,7 +61,7 @@ class RutaControllerTest {
     private static RutaResponse ruta() {
         return new RutaResponse(1L, 7, LocalDate.of(2026, 9, 15), LocalTime.of(9, 30), true, 23.5, 220,
                 LocalTime.of(13, 10), 12340, LocalTime.of(9, 25), null, null,
-                List.of(), List.of("https://www.google.com/maps/dir/?api=1"), List.of());
+                List.of(), List.of("https://www.google.com/maps/dir/?api=1"), List.of(), EstadoRuta.EN_CURSO);
     }
 
     @Test
@@ -166,6 +170,17 @@ class RutaControllerTest {
     }
 
     @Test
+    void miaSinFechaPideAlServicioLaRutaDeHoy() throws Exception {
+        when(rutaService.obtenerDeHoy(7)).thenReturn(ruta());
+
+        mockMvc.perform(get("/api/rutas/mia").header("Authorization", repartidor))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.repartidorId").value(7));
+
+        verify(rutaService).obtenerDeHoy(7);
+    }
+
+    @Test
     void elRepartidorAnotaElOdometroEnSuPropiaRuta() throws Exception {
         when(rutaService.anotarOdometro(eq(7), any(OdometroRequest.class))).thenReturn(ruta());
 
@@ -198,5 +213,54 @@ class RutaControllerTest {
                 .andExpect(status().isBadRequest());
 
         verify(rutaService, never()).anotarOdometro(anyInt(), any());
+    }
+
+    // --- historial ---
+
+    @Test
+    void elJefeDeBodegaVeElHistorialDeRutas() throws Exception {
+        LocalDate desde = LocalDate.of(2026, 9, 1);
+        LocalDate hasta = LocalDate.of(2026, 9, 15);
+        when(rutaService.historial(desde, hasta, null)).thenReturn(List.of(new RutaResumen(1L, 7, "Juan Perez",
+                hasta, LocalTime.of(9, 30), EstadoRuta.COMPLETADA, true, 5, 4, 1, 0, 23.5, 12340, 12371, 31)));
+
+        mockMvc.perform(get("/api/rutas/historial").header("Authorization", jefe)
+                        .param("desde", "2026-09-01").param("hasta", "2026-09-15"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].repartidor").value("Juan Perez"))
+                .andExpect(jsonPath("$[0].estado").value("COMPLETADA"))
+                .andExpect(jsonPath("$[0].entregadas").value(4))
+                .andExpect(jsonPath("$[0].kmRecorridos").value(31))
+                .andExpect(jsonPath("$[0].fecha").value("2026-09-15"));
+    }
+
+    @Test
+    void elHistorialFiltraPorRepartidor() throws Exception {
+        when(rutaService.historial(any(), any(), eq(7))).thenReturn(List.of());
+
+        mockMvc.perform(get("/api/rutas/historial").header("Authorization", jefe)
+                        .param("desde", "2026-09-01").param("hasta", "2026-09-15").param("repartidorId", "7"))
+                .andExpect(status().isOk());
+
+        verify(rutaService).historial(LocalDate.of(2026, 9, 1), LocalDate.of(2026, 9, 15), 7);
+    }
+
+    @Test
+    void unRepartidorNoVeElHistorial() throws Exception {
+        mockMvc.perform(get("/api/rutas/historial").header("Authorization", repartidor)
+                        .param("desde", "2026-09-01").param("hasta", "2026-09-15"))
+                .andExpect(status().isForbidden());
+
+        verify(rutaService, never()).historial(any(), any(), any());
+    }
+
+    @Test
+    void elHistorialSinFechasEsBadRequest() throws Exception {
+        // La validación es del servicio (RutaServiceTest); acá, que su 400 llega tal cual.
+        when(rutaService.historial(null, null, null))
+                .thenThrow(new ApiException(HttpStatus.BAD_REQUEST, "Indica desde y hasta qué fecha"));
+
+        mockMvc.perform(get("/api/rutas/historial").header("Authorization", jefe))
+                .andExpect(status().isBadRequest());
     }
 }

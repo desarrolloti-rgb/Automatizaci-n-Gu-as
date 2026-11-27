@@ -424,6 +424,21 @@ gratis, lo que se paga son las APIs.
   es un dígito de más). `planificar` no toca el odómetro: regenerar la ruta con el repartidor
   en la calle conserva lo anotado. Ojo al comparar: el optimizador gratuito estima los km en
   línea recta × 1,35, no por calle.
+- **El historial de rutas no se reescribe** (V15, desde el 2026-11-27; plan en
+  `docs/planes/historial-de-rutas.md`). Una guía puede estar en varias rutas: la de ayer, donde
+  no se entregó, y la de hoy. `borrarParadasPrevias` y `quitarGuiaDeRutas` solo borran paradas
+  **sin resolver** y de **hoy en adelante** (hoy en `rutas.zona-horaria`); antes borraban de
+  todas, y una guía que volvía a salir desaparecía del recorrido del día anterior. Cada parada
+  guarda su `resultado` (ENTREGADA o RECHAZADA) y `resuelta_en`: los escribe
+  `RutaRepository.resolverParada` al entregar o rechazar, en la parada más reciente sin resolver,
+  así una guía rechazada ayer y entregada hoy dice lo suyo en cada ruta. Una rechazada que se
+  reabre sigue en su ruta, como rechazada.
+- **El estado de una ruta se calcula, no se guarda** (`EstadoRuta.de`): `PLANIFICADA` (sin
+  odómetro de salida ni paradas resueltas), `EN_CURSO`, `COMPLETADA` (todas resueltas y, si
+  vuelve a bodega, el odómetro de término anotado) y `CON_PENDIENTES` (día pasado sin completar).
+  Va en `RutaResponse.estado` y en el historial (`GET /api/rutas/historial`, solo jefe, máximo
+  93 días), que cuenta las paradas por resultado con una consulta agrupada y trae los km
+  recorridos (término − salida del odómetro).
 
 Cada paso es una interfaz con dos implementaciones, elegidas con `@ConditionalOnProperty`.
 **Por defecto van las gratuitas**, porque la empresa no quiere pagar por ahora:
@@ -485,7 +500,7 @@ y repartidor) · `POST /api/guias` · `PATCH /api/guias/{id}/repartidor` ·
 `POST /api/guias/{id}/rechazo` · `PATCH /api/guias/{id}/sincronizada` ·
 `PATCH /api/guias/{id}/horario` · `PATCH /api/guias/{id}/direccion` (bodega corrige la
 dirección leyendo el pie) · `PATCH /api/guias/{id}/reapertura` (R → P, bodega) ·
-`POST /api/rutas` · `GET /api/rutas?repartidorId=&fecha=` · `GET /api/rutas/mia?fecha=` ·
+`POST /api/rutas` · `GET /api/rutas?repartidorId=&fecha=` · `GET /api/rutas/historial?desde=&hasta=&repartidorId=` · `GET /api/rutas/mia?fecha=` ·
 `PATCH /api/rutas/mia/odometro` (el repartidor anota el kilometraje en su ruta de hoy) ·
 `PATCH /api/guias/{id}/transportista` (bodega marca "Despacho externo: SAMEX") ·
 `PATCH /api/guias/{id}/envio-externo` · `GET /api/envios-externos` · `GET /api/transportistas` ·
@@ -526,7 +541,7 @@ misma tabla pero no reparte.
 | `POST /api/guias/sincronizar`, `POST /api/guias` | sí | 403 |
 | `PATCH /api/guias/{id}/repartidor`, `PATCH .../horario`, `PATCH .../direccion` | sí | 403 |
 | `PATCH .../transportista`, `PATCH .../envio-externo`, `GET /api/envios-externos`, `GET /api/transportistas` | sí | 403 |
-| `POST /api/rutas`, `GET /api/rutas?repartidorId=` | sí | 403 (usa `/mia`) |
+| `POST /api/rutas`, `GET /api/rutas?repartidorId=`, `GET /api/rutas/historial` | sí | 403 (usa `/mia`) |
 | `GET /api/repartidores`, `GET /api/sap/**` | sí | 403 |
 | `GET /api/guias` | todas, con cualquier filtro | sólo las suyas; `?repartidorId=` ajeno → 403 |
 | `GET /api/guias/{id}` | sí | sólo si es suya, si no 403 |

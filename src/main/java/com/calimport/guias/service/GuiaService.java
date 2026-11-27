@@ -1,6 +1,7 @@
 package com.calimport.guias.service;
 
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.LocalTime;
 import java.util.List;
 import java.util.Objects;
@@ -10,6 +11,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.calimport.guias.config.RutasConfig;
 import com.calimport.guias.correo.CorreoDespachoService;
 import com.calimport.guias.model.EstadoGuia;
 import com.calimport.guias.model.Guia;
@@ -30,19 +32,29 @@ public class GuiaService {
     private final RutaRepository rutaRepository;
     private final CorreoDespachoService correoDespacho;
     private final List<String> transportistas;
+    private final RutasConfig rutas;
 
     /**
      * @param transportistas los transportistas externos que bodega puede elegir
      *     ({@code guias.transportistas}, "SAMEX"). Vacío = no se puede marcar ninguna guía.
+     * @param rutas de ahí sale qué día es hoy: sacar una guía de las rutas no toca las de días
+     *     anteriores, que son el historial
      */
     public GuiaService(GuiaRepository guiaRepository, SincronizacionSapService sincronizacionSap,
                        RutaRepository rutaRepository, CorreoDespachoService correoDespacho,
-                       @Value("${guias.transportistas:SAMEX}") List<String> transportistas) {
+                       @Value("${guias.transportistas:SAMEX}") List<String> transportistas,
+                       RutasConfig rutas) {
         this.guiaRepository = guiaRepository;
         this.sincronizacionSap = sincronizacionSap;
         this.rutaRepository = rutaRepository;
         this.correoDespacho = correoDespacho;
         this.transportistas = transportistas.stream().map(String::trim).filter(t -> !t.isEmpty()).toList();
+        this.rutas = rutas;
+    }
+
+    /** Hoy en la zona de las rutas: la VM corre en UTC y de noche ya sería mañana. */
+    private LocalDate hoy() {
+        return LocalDate.now(rutas.zona());
     }
 
     /**
@@ -376,7 +388,7 @@ public class GuiaService {
         }
         // Antes de tocar la guía: el delete limpia el contexto de persistencia, y lo que se
         // cambie después se guarda igual (save hace merge).
-        rutaRepository.quitarGuiaDeRutas(id);
+        rutaRepository.quitarGuiaDeRutas(id, hoy());
         if (guia.getTransportista() != null) {
             // Deja de ir por el transportista externo: es el mismo selector, elegir un
             // repartidor (o ninguno) le quita la marca. La había recibido el transportista, no
@@ -409,7 +421,7 @@ public class GuiaService {
         if (Objects.equals(guia.getTransportista(), elegido)) {
             return guia;
         }
-        rutaRepository.quitarGuiaDeRutas(id);
+        rutaRepository.quitarGuiaDeRutas(id, hoy());
         guia.setTransportista(elegido);
         guia.setRepartidorId(null);
         guia.setRecibidaPorRepartidor(elegido != null);
@@ -509,6 +521,7 @@ public class GuiaService {
         guia.setUrlFoto(urlFoto);
         guia.setHashFoto(hashFoto);
         correoDespacho.programar(guia);
+        rutaRepository.resolverParada(id, EstadoGuia.ENTREGADA, guia.getFechaEntrega());
         return guardarYReflejar(guia);
     }
 
@@ -555,6 +568,7 @@ public class GuiaService {
         guia.setEstado(EstadoGuia.RECHAZADA);
         guia.setFechaEntrega(Instant.now());
         guia.setMotivoRechazo(motivoLimpio);
+        rutaRepository.resolverParada(id, EstadoGuia.RECHAZADA, guia.getFechaEntrega());
         return guardarYReflejar(guia);
     }
 
@@ -579,7 +593,7 @@ public class GuiaService {
                     "Solo se puede reabrir una guía RECHAZADA (esta está " + guia.getEstado() + ")");
         }
         // Queda sin dueño: tampoco puede seguir en la ruta de quien la rechazó.
-        rutaRepository.quitarGuiaDeRutas(id);
+        rutaRepository.quitarGuiaDeRutas(id, hoy());
         guia.setEstado(EstadoGuia.PENDIENTE);
         guia.setMotivoRechazo(null);
         guia.setFechaEntrega(null);

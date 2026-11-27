@@ -15,6 +15,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
 
+import com.calimport.guias.config.RutasConfig;
 import com.calimport.guias.correo.CorreoDespachoService;
 import com.calimport.guias.model.EstadoGuia;
 import com.calimport.guias.model.Guia;
@@ -35,6 +36,7 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -68,7 +70,7 @@ class GuiaServiceTest {
     @BeforeEach
     void setUp() {
         service = new GuiaService(guiaRepository, sincronizacionSap, rutaRepository, correoDespacho,
-                List.of("SAMEX"));
+                List.of("SAMEX"), new RutasConfig());
     }
 
     /** Guía tal como queda recién creada: PENDIENTE, sin repartidor ni evidencia. */
@@ -643,7 +645,7 @@ class GuiaServiceTest {
 
         assertNull(resultado.getRepartidorId());
         assertEquals(EstadoGuia.PENDIENTE, resultado.getEstado());
-        verify(rutaRepository).quitarGuiaDeRutas(1L);
+        verify(rutaRepository).quitarGuiaDeRutas(eq(1L), any());
         // No estaba retirada: en SAP sigue en P, no hay nada que mandar.
         verify(sincronizacionSap, never()).empujar(any());
     }
@@ -660,7 +662,7 @@ class GuiaServiceTest {
 
         assertEquals(99, resultado.getRepartidorId());
         assertFalse(resultado.isRecibidaPorRepartidor());
-        verify(rutaRepository).quitarGuiaDeRutas(1L);
+        verify(rutaRepository).quitarGuiaDeRutas(eq(1L), any());
         verify(sincronizacionSap).empujar(resultado);
     }
 
@@ -671,7 +673,7 @@ class GuiaServiceTest {
 
         service.reasignar(1L, guia.getRepartidorId());
 
-        verify(rutaRepository, never()).quitarGuiaDeRutas(any());
+        verify(rutaRepository, never()).quitarGuiaDeRutas(any(), any());
         verify(guiaRepository, never()).save(any());
     }
 
@@ -685,7 +687,7 @@ class GuiaServiceTest {
 
         // Una rechazada se reabre primero (reapertura); acá no se toca.
         assertEquals(HttpStatus.CONFLICT, e.getStatus());
-        verify(rutaRepository, never()).quitarGuiaDeRutas(any());
+        verify(rutaRepository, never()).quitarGuiaDeRutas(any(), any());
     }
 
     // --- transportista externo: bodega elige "Despacho externo: SAMEX" ---
@@ -719,7 +721,7 @@ class GuiaServiceTest {
         assertFalse(resultado.getFechaRecepcionRepartidor().isBefore(antes));
         assertEquals(EstadoGuia.PENDIENTE, resultado.getEstado());
         // Si quedara en la ruta, el repartidor anterior la seguiría viendo en su recorrido.
-        verify(rutaRepository).quitarGuiaDeRutas(1L);
+        verify(rutaRepository).quitarGuiaDeRutas(eq(1L), any());
         // En SAP pasa a T con SAMEX como despachador: queda pendiente de llegar allá, y si SAP
         // no contesta, el reintento de siempre la vuelve a mandar.
         assertFalse(resultado.isSincronizada());
@@ -747,7 +749,7 @@ class GuiaServiceTest {
     @Test
     void sinTransportistasConfiguradosNoSePuedeMarcarNinguna() {
         GuiaService sinLista = new GuiaService(guiaRepository, sincronizacionSap, rutaRepository,
-                correoDespacho, List.of());
+                correoDespacho, List.of(), new RutasConfig());
 
         ApiException e = assertThrows(ApiException.class, () -> sinLista.definirTransportista(1L, "SAMEX"));
 
@@ -764,7 +766,7 @@ class GuiaServiceTest {
 
         assertEquals(HttpStatus.CONFLICT, e.getStatus());
         verify(guiaRepository, never()).save(any());
-        verify(rutaRepository, never()).quitarGuiaDeRutas(any());
+        verify(rutaRepository, never()).quitarGuiaDeRutas(any(), any());
     }
 
     @Test
@@ -774,7 +776,7 @@ class GuiaServiceTest {
         service.definirTransportista(1L, "SAMEX");
 
         verify(guiaRepository, never()).save(any());
-        verify(rutaRepository, never()).quitarGuiaDeRutas(any());
+        verify(rutaRepository, never()).quitarGuiaDeRutas(any(), any());
         verify(sincronizacionSap, never()).empujar(any());
     }
 
@@ -1050,6 +1052,38 @@ class GuiaServiceTest {
     }
 
     @Test
+    void entregarAnotaElResultadoEnLaParadaDeSuRuta() {
+        when(guiaRepository.findById(1L)).thenReturn(Optional.of(guiaConRepartidor()));
+        devuelveLoQueGuarda();
+
+        Guia resultado = service.entregar(1L, 7, "https://fotos/guia-1.jpg", "abc123hash");
+
+        verify(rutaRepository).resolverParada(1L, EstadoGuia.ENTREGADA, resultado.getFechaEntrega());
+    }
+
+    @Test
+    void rechazarAnotaElResultadoEnLaParadaDeSuRuta() {
+        when(guiaRepository.findById(1L)).thenReturn(Optional.of(guiaConRepartidor()));
+        devuelveLoQueGuarda();
+
+        Guia resultado = service.rechazar(1L, 7, "El cliente no tenía espacio en bodega");
+
+        verify(rutaRepository).resolverParada(1L, EstadoGuia.RECHAZADA, resultado.getFechaEntrega());
+    }
+
+    @Test
+    void unaEntregaQueNoProcedeNoTocaLaParada() {
+        // Si la entrega no procede (guía ya resuelta), la parada no se marca.
+        Guia entregada = guiaConRepartidor();
+        entregada.setEstado(EstadoGuia.ENTREGADA);
+        when(guiaRepository.findById(1L)).thenReturn(Optional.of(entregada));
+
+        assertThrows(ApiException.class, () -> service.entregar(1L, 7, "https://fotos/guia-1.jpg", "abc123hash"));
+
+        verify(rutaRepository, never()).resolverParada(any(), any(), any());
+    }
+
+    @Test
     void entregarExigeUrlDeFoto() {
         ApiException sinUrl = assertThrows(ApiException.class, () -> service.entregar(1L, 7,null, "hash"));
         ApiException urlEnBlanco = assertThrows(ApiException.class, () -> service.entregar(1L, 7,"   ", "hash"));
@@ -1243,7 +1277,7 @@ class GuiaServiceTest {
         assertNull(resultado.getFechaRecepcionRepartidor());
         verify(sincronizacionSap).empujar(resultado);
         // Tampoco puede seguir en la ruta de quien la rechazó.
-        verify(rutaRepository).quitarGuiaDeRutas(1L);
+        verify(rutaRepository).quitarGuiaDeRutas(eq(1L), any());
     }
 
     @Test

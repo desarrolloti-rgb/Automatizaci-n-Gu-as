@@ -25,18 +25,23 @@
   .\deploy\desplegar.ps1 -SoloFrontend
   .\deploy\desplegar.ps1 -SinIap        # si todavia no esta el rol iap.tunnelResourceAccessor
   .\deploy\desplegar.ps1 -Prueba -SoloFrontend   # instancia de prueba, /gd-prueba/
+  .\deploy\desplegar.ps1 -Prueba -CarpetaFrontend ..\Frontend-historial   # frontend de otro worktree
 #>
 param(
   [string]$Vm = 'apps',
   [string]$Zona = 'us-east1-b',
   [switch]$SoloFrontend,
   [switch]$SinIap,
-  [switch]$Prueba
+  [switch]$Prueba,
+  # El frontend a compilar. Por defecto, la carpeta Frontend al lado del backend; con worktrees
+  # (una rama en otra carpeta) se indica cual. En un worktree sin build scripts aprobados, pnpm
+  # exec intenta reinstalar: correr antes $env:pnpm_config_verify_deps_before_run = 'false'.
+  [string]$CarpetaFrontend = ''
 )
 
 $ErrorActionPreference = 'Stop'
 $raiz = Split-Path $PSScriptRoot -Parent
-$frontend = Join-Path (Split-Path $raiz -Parent) 'Frontend'
+$frontend = if ($CarpetaFrontend) { (Resolve-Path $CarpetaFrontend).Path } else { Join-Path (Split-Path $raiz -Parent) 'Frontend' }
 $jar = Join-Path $raiz 'target\guias-backend-0.0.1-SNAPSHOT.jar'
 
 # -Prueba despliega la instancia de prueba (https://apps.calimport.cl/gd-prueba/, contra SAP

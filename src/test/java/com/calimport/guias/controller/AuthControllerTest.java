@@ -221,11 +221,13 @@ class AuthControllerTest {
         // Cargos tal como estaban en OHEM el 2026-10-06.
         assertEquals(Optional.of(Rol.JEFE_BODEGA), AuthController.rolDeCargo("Jefe Bodega"));
         assertEquals(Optional.of(Rol.JEFE_BODEGA), AuthController.rolDeCargo("  jefe   bogeda "));
+        assertEquals(Optional.of(Rol.JEFE_BODEGA), AuthController.rolDeCargo("Gerencia Operaciones"));
+        assertEquals(Optional.of(Rol.JEFE_BODEGA), AuthController.rolDeCargo("GERENCIA OPERACIONES"));
         for (String bodega : List.of("Bodeguero", "Bodeguero CCP", "Bodeguera ANT", "Bodeguero PMO", "Bodega",
                 "Personal bodega", "PERSONAL BODEGA", "Despachador", "despachadora")) {
             assertEquals(Optional.of(Rol.Despachador), AuthController.rolDeCargo(bodega), bodega);
         }
-        for (String otro : List.of("Facturador", "Logistica", "STOCK", "Ventas Terreno", "Gerencia Operaciones",
+        for (String otro : List.of("Facturador", "Logistica", "STOCK", "Ventas Terreno", "Gerencia Ventas", "Operaciones",
                 "Jefe de Ventas", "Soporte TI", "")) {
             assertEquals(Optional.empty(), AuthController.rolDeCargo(otro), otro);
         }

@@ -1,6 +1,7 @@
 package com.calimport.guias.controller;
 
 import java.time.LocalDate;
+import java.util.List;
 
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -16,6 +17,7 @@ import org.springframework.web.bind.annotation.RestController;
 import com.calimport.guias.controller.dto.GenerarRutaRequest;
 import com.calimport.guias.controller.dto.OdometroRequest;
 import com.calimport.guias.controller.dto.RutaResponse;
+import com.calimport.guias.controller.dto.RutaResumen;
 import com.calimport.guias.security.UsuarioActual;
 import com.calimport.guias.service.RutaService;
 
@@ -50,6 +52,22 @@ public class RutaController {
         return rutaService.obtener(repartidorId, fecha);
     }
 
+    /**
+     * El historial: una fila por ruta entre dos fechas (como máximo 93 días), las más nuevas
+     * primero, con su estado, las paradas por resultado y el odómetro. El recorrido de una ruta
+     * se abre con {@link #obtener}.
+     */
+    @GetMapping("/historial")
+    @PreAuthorize("hasRole('JEFE_BODEGA')")
+    public List<RutaResumen> historial(
+            // Opcionales acá y obligatorias en el servicio: así la falta es un 400 con su motivo, y
+            // no el 500 genérico que da un parámetro requerido ausente.
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate desde,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate hasta,
+            @RequestParam(required = false) Integer repartidorId) {
+        return rutaService.historial(desde, hasta, repartidorId);
+    }
+
     /** La ruta del repartidor que inició sesión, sin que la app tenga que conocer su id. */
     @GetMapping("/mia")
     @PreAuthorize("hasRole('Despachador')")
@@ -57,7 +75,7 @@ public class RutaController {
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate fecha,
             Authentication authentication) {
         int employeeId = UsuarioActual.de(authentication).employeeId();
-        return rutaService.obtener(employeeId, fecha != null ? fecha : LocalDate.now());
+        return fecha != null ? rutaService.obtener(employeeId, fecha) : rutaService.obtenerDeHoy(employeeId);
     }
 
     /**

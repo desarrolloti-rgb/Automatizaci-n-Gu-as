@@ -4,6 +4,8 @@ import java.time.LocalDate;
 import java.time.LocalTime;
 import java.util.List;
 
+import com.calimport.guias.model.EstadoGuia;
+import com.calimport.guias.model.EstadoRuta;
 import com.calimport.guias.model.OrigenHorario;
 
 /**
@@ -36,7 +38,9 @@ public record RutaResponse(
         LocalTime odometroTerminoHora,
         List<Parada> paradas,
         List<String> tramosGoogleMaps,
-        List<String> advertencias) {
+        List<String> advertencias,
+        /** En qué va la ruta: se calcula al leerla (ver {@code EstadoRuta}). */
+        EstadoRuta estado) {
 
     public record Parada(
             int orden,
@@ -61,6 +65,11 @@ public record RutaResponse(
              */
             String footer,
             String wazeUrl,
-            String googleMapsUrl) {
+            String googleMapsUrl,
+            /**
+             * Cómo terminó esta parada: ENTREGADA o RECHAZADA, o null si sigue pendiente. Es de la
+             * parada y no de la guía: si la guía volvió a salir otro día, cada ruta dice lo suyo.
+             */
+            EstadoGuia resultado) {
     }
 }
