@@ -143,7 +143,7 @@ Ver S-1 a S-4: si todas valen, no hay preguntas.
   - Criterios:
     - [ ] Test: entregar marca la parada de hoy; una guía sin ruta se entrega igual.
     - [ ] Test: rechazada ayer, reabierta y entregada hoy → ayer RECHAZADA, hoy ENTREGADA.
-- [ ] T-03 Estado de la ruta e historial · M · Depende de: T-02
+- [x] T-03 Estado de la ruta e historial · M · Depende de: T-02
   - Qué: `EstadoRuta` calculado (D-01); `GET /api/rutas/historial` con `@PreAuthorize`; `resultado`
     en `RutaResponse.Parada`.
   - Criterios:

@@ -3,6 +3,7 @@ package com.calimport.guias.repository;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -18,6 +19,29 @@ import com.calimport.guias.model.Ruta;
 public interface RutaRepository extends JpaRepository<Ruta, Long> {
 
     Optional<Ruta> findByRepartidorIdAndFecha(Integer repartidorId, LocalDate fecha);
+
+    /** El historial: las más nuevas primero. No toca las paradas (se cuentan aparte). */
+    List<Ruta> findByFechaBetweenOrderByFechaDescRepartidorIdAsc(LocalDate desde, LocalDate hasta);
+
+    List<Ruta> findByRepartidorIdAndFechaBetweenOrderByFechaDesc(Integer repartidorId, LocalDate desde,
+                                                                  LocalDate hasta);
+
+    /** Cuántas paradas tiene cada ruta, por resultado (null = sin resolver). */
+    interface ConteoParadas {
+        Long getRutaId();
+
+        EstadoGuia getResultado();
+
+        long getCantidad();
+    }
+
+    /**
+     * Las paradas de estas rutas contadas por resultado, en una consulta: cargar cada ruta con
+     * sus paradas traería también cada guía.
+     */
+    @Query("select p.ruta.id as rutaId, p.resultado as resultado, count(p) as cantidad"
+            + " from RutaParada p where p.ruta.id in :rutaIds group by p.ruta.id, p.resultado")
+    List<ConteoParadas> contarParadas(@Param("rutaIds") Collection<Long> rutaIds);
 
     /**
      * Antes de replanificar: borra las paradas sin resolver de la ruta del día del repartidor, y

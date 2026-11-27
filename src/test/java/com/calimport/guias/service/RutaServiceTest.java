@@ -24,6 +24,7 @@ import com.calimport.guias.controller.dto.GenerarRutaRequest.GuiaEnRuta;
 import com.calimport.guias.controller.dto.OdometroRequest;
 import com.calimport.guias.controller.dto.RutaResponse;
 import com.calimport.guias.model.EstadoGuia;
+import com.calimport.guias.model.EstadoRuta;
 import com.calimport.guias.model.Guia;
 import com.calimport.guias.model.OrigenHorario;
 import com.calimport.guias.model.Repartidor;
@@ -608,5 +609,107 @@ class RutaServiceTest {
         RutaResponse ruta = service.generar(request(1L));
 
         assertEquals(12340, ruta.odometroSalida());
+    }
+
+    // --- historial ---
+
+    private static RutaRepository.ConteoParadas conteo(long rutaId, EstadoGuia resultado, long cantidad) {
+        return new RutaRepository.ConteoParadas() {
+            public Long getRutaId() { return rutaId; }
+            public EstadoGuia getResultado() { return resultado; }
+            public long getCantidad() { return cantidad; }
+        };
+    }
+
+    private Ruta rutaDelHistorial(long id, int repartidorId, LocalDate fecha, boolean vuelve) {
+        Ruta ruta = new Ruta(repartidorId, fecha, SALIDA);
+        ruta.setId(id);
+        ruta.planificar(SALIDA, vuelve, 23.46, null);
+        return ruta;
+    }
+
+    @Test
+    void elHistorialCuentaLasParadasPorResultadoYLosKmDelOdometro() {
+        Ruta ruta = rutaDelHistorial(1L, REPARTIDOR, FECHA, true);
+        ruta.anotarOdometroSalida(12340, Instant.parse("2026-09-15T12:25:00Z"));
+        ruta.anotarOdometroTermino(12371, Instant.parse("2026-09-15T20:10:00Z"));
+        when(rutaRepository.findByFechaBetweenOrderByFechaDescRepartidorIdAsc(FECHA.minusDays(7), FECHA))
+                .thenReturn(List.of(ruta));
+        when(rutaRepository.contarParadas(List.of(1L))).thenReturn(List.of(
+                conteo(1L, EstadoGuia.ENTREGADA, 3), conteo(1L, EstadoGuia.RECHAZADA, 1), conteo(1L, null, 1)));
+        Repartidor juan = new Repartidor();
+        juan.setEmployeeId(REPARTIDOR);
+        juan.setNombre("Juan Perez");
+        when(repartidorService.listar()).thenReturn(List.of(juan));
+
+        var fila = service.historial(FECHA.minusDays(7), FECHA, null).get(0);
+
+        assertEquals("Juan Perez", fila.repartidor());
+        assertEquals(5, fila.paradas());
+        assertEquals(3, fila.entregadas());
+        assertEquals(1, fila.rechazadas());
+        assertEquals(1, fila.pendientes());
+        assertEquals(23.5, fila.kmPlanificados());
+        assertEquals(31, fila.kmRecorridos());
+        // FECHA ya pasó y quedó una parada sin resolver.
+        assertEquals(EstadoRuta.CON_PENDIENTES, fila.estado());
+    }
+
+    @Test
+    void elHistorialNombraAUnRepartidorQueYaNoEstaYSinOdometroNoTieneKmRecorridos() {
+        Ruta ruta = rutaDelHistorial(2L, 8, FECHA, false);
+        when(rutaRepository.findByRepartidorIdAndFechaBetweenOrderByFechaDesc(8, FECHA, FECHA))
+                .thenReturn(List.of(ruta));
+        when(rutaRepository.contarParadas(List.of(2L))).thenReturn(List.of(conteo(2L, EstadoGuia.ENTREGADA, 2)));
+        when(repartidorService.listar()).thenReturn(List.of());
+
+        var fila = service.historial(FECHA, FECHA, 8).get(0);
+
+        assertEquals("Repartidor 8", fila.repartidor());
+        assertNull(fila.kmRecorridos());
+        assertEquals(EstadoRuta.COMPLETADA, fila.estado());
+    }
+
+    @Test
+    void unHistorialVacioNoConsultaLasParadas() {
+        when(rutaRepository.findByFechaBetweenOrderByFechaDescRepartidorIdAsc(any(), any())).thenReturn(List.of());
+
+        assertTrue(service.historial(FECHA, FECHA, null).isEmpty());
+        verify(rutaRepository, never()).contarParadas(any());
+    }
+
+    @Test
+    void elHistorialSinFechasEsBadRequest() {
+        assertEquals(HttpStatus.BAD_REQUEST,
+                assertThrows(ApiException.class, () -> service.historial(null, FECHA, null)).getStatus());
+        assertEquals(HttpStatus.BAD_REQUEST,
+                assertThrows(ApiException.class, () -> service.historial(FECHA, null, null)).getStatus());
+    }
+
+    @Test
+    void elHistorialRechazaUnRangoAlRevesOMasLargoQueTresMeses() {
+        ApiException alReves = assertThrows(ApiException.class, () -> service.historial(FECHA, FECHA.minusDays(1), null));
+        assertEquals(HttpStatus.BAD_REQUEST, alReves.getStatus());
+
+        ApiException largo = assertThrows(ApiException.class,
+                () -> service.historial(FECHA.minusDays(RutaService.MAX_DIAS_HISTORIAL), FECHA, null));
+        assertEquals(HttpStatus.BAD_REQUEST, largo.getStatus());
+
+        // Justo el máximo sí se puede.
+        when(rutaRepository.findByFechaBetweenOrderByFechaDescRepartidorIdAsc(any(), any())).thenReturn(List.of());
+        assertTrue(service.historial(FECHA.minusDays(RutaService.MAX_DIAS_HISTORIAL - 1), FECHA, null).isEmpty());
+    }
+
+    @Test
+    void laRutaDiceElResultadoDeCadaParadaYSuEstado() {
+        Guia guia = guiaUbicada(1L);
+        Ruta ruta = new Ruta(REPARTIDOR, FECHA, SALIDA);
+        ruta.agregarParada(guia, 1, FECHA.atTime(10, 0).atZone(config.zona()).toInstant());
+        ruta.getParadas().get(0).resolver(EstadoGuia.ENTREGADA, Instant.parse("2026-09-15T13:05:00Z"));
+
+        RutaResponse respuesta = service.aRespuesta(ruta);
+
+        assertEquals(EstadoGuia.ENTREGADA, respuesta.paradas().get(0).resultado());
+        assertEquals(EstadoRuta.COMPLETADA, respuesta.estado());
     }
 }

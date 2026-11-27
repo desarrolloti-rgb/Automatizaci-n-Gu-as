@@ -6,10 +6,13 @@ import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
@@ -25,7 +28,9 @@ import com.calimport.guias.controller.dto.GenerarRutaRequest;
 import com.calimport.guias.controller.dto.GenerarRutaRequest.GuiaEnRuta;
 import com.calimport.guias.controller.dto.OdometroRequest;
 import com.calimport.guias.controller.dto.RutaResponse;
+import com.calimport.guias.controller.dto.RutaResumen;
 import com.calimport.guias.model.EstadoGuia;
+import com.calimport.guias.model.EstadoRuta;
 import com.calimport.guias.model.Guia;
 import com.calimport.guias.model.Repartidor;
 import com.calimport.guias.model.Rol;
@@ -120,6 +125,64 @@ public class RutaService {
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND,
                         "No hay ruta para el repartidor " + repartidorId + " el " + fecha));
         return aRespuesta(ruta);
+    }
+
+    /** Los días del historial que se piden de una vez: tres meses. */
+    static final int MAX_DIAS_HISTORIAL = 93;
+
+    /**
+     * El historial de rutas: una fila por ruta, las más nuevas primero, con lo que bodega mide
+     * sin abrirla (estado, paradas por resultado, km planificados y odómetro). Las paradas se
+     * cuentan en una consulta agrupada: cargarlas traería cada guía.
+     *
+     * @param repartidorId null = todos
+     */
+    @Transactional(readOnly = true)
+    public List<RutaResumen> historial(LocalDate desde, LocalDate hasta, Integer repartidorId) {
+        if (desde == null || hasta == null) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Indica desde y hasta qué fecha");
+        }
+        if (hasta.isBefore(desde)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "La fecha hasta no puede ser anterior a la fecha desde");
+        }
+        if (ChronoUnit.DAYS.between(desde, hasta) >= MAX_DIAS_HISTORIAL) {
+            throw new ApiException(HttpStatus.BAD_REQUEST,
+                    "Pide como máximo " + MAX_DIAS_HISTORIAL + " días de historial a la vez");
+        }
+        List<Ruta> rutas = repartidorId == null
+                ? rutaRepository.findByFechaBetweenOrderByFechaDescRepartidorIdAsc(desde, hasta)
+                : rutaRepository.findByRepartidorIdAndFechaBetweenOrderByFechaDesc(repartidorId, desde, hasta);
+        if (rutas.isEmpty()) {
+            return List.of();
+        }
+
+        Map<Long, Map<EstadoGuia, Long>> conteos = new HashMap<>();
+        for (RutaRepository.ConteoParadas c : rutaRepository.contarParadas(rutas.stream().map(Ruta::getId).toList())) {
+            // HashMap y no EnumMap: el resultado null (sin resolver) también es una clave.
+            conteos.computeIfAbsent(c.getRutaId(), id -> new HashMap<>()).put(c.getResultado(), c.getCantidad());
+        }
+        // Todos, también los inactivos: el historial sigue nombrando a quien ya no reparte.
+        Map<Integer, String> nombres = new HashMap<>();
+        repartidorService.listar().forEach(r -> nombres.put(r.getEmployeeId(), r.getNombre()));
+
+        LocalDate hoy = LocalDate.now(config.zona());
+        return rutas.stream().map(ruta -> {
+            Map<EstadoGuia, Long> c = conteos.getOrDefault(ruta.getId(), Map.of());
+            int entregadas = c.getOrDefault(EstadoGuia.ENTREGADA, 0L).intValue();
+            int rechazadas = c.getOrDefault(EstadoGuia.RECHAZADA, 0L).intValue();
+            int pendientes = c.containsKey(null) ? c.get(null).intValue() : 0;
+            int total = entregadas + rechazadas + pendientes;
+            Integer salida = ruta.getOdometroSalida();
+            Integer termino = ruta.getOdometroTermino();
+            return new RutaResumen(ruta.getId(), ruta.getRepartidorId(),
+                    nombres.getOrDefault(ruta.getRepartidorId(), "Repartidor " + ruta.getRepartidorId()),
+                    ruta.getFecha(), ruta.getHoraSalida(),
+                    EstadoRuta.de(total, entregadas + rechazadas, ruta.isVuelveABodega(), salida != null,
+                            termino != null, ruta.getFecha().isBefore(hoy)),
+                    ruta.isVuelveABodega(), total, entregadas, rechazadas, pendientes,
+                    ruta.getKmPlanificados() == null ? null : Math.round(ruta.getKmPlanificados() * 10) / 10.0,
+                    salida, termino, salida != null && termino != null ? termino - salida : null);
+        }).toList();
     }
 
     /**
@@ -294,6 +357,7 @@ public class RutaService {
         List<RutaResponse.Parada> paradas = new ArrayList<>();
         List<Punto> puntos = new ArrayList<>();
         List<String> advertencias = new ArrayList<>();
+        int resueltas = 0;
 
         for (RutaParada parada : ruta.getParadas()) {
             Guia guia = parada.getGuia();
@@ -315,8 +379,12 @@ public class RutaService {
                     guia.getDireccion(), guia.getLatitud(), guia.getLongitud(), guia.isUbicacionAproximada(),
                     llegada.withSecond(0).withNano(0), guia.getVentanaDesde(), guia.getVentanaHasta(),
                     guia.getOrigenHorario(), fueraDeHorario, guia.getNotaEntrega(), guia.getComentario(),
-                    guia.getFooter(), LinksNavegacion.waze(punto), LinksNavegacion.googleMaps(punto)));
+                    guia.getFooter(), LinksNavegacion.waze(punto), LinksNavegacion.googleMaps(punto),
+                    parada.getResultado()));
             puntos.add(punto);
+            if (parada.getResultado() != null) {
+                resueltas++;
+            }
         }
 
         Punto origen = new Punto(config.getOrigenLatitud(), config.getOrigenLongitud());
@@ -334,7 +402,13 @@ public class RutaService {
                 hora(termino, zona),
                 ruta.getOdometroSalida(), hora(ruta.getOdometroSalidaEn(), zona),
                 ruta.getOdometroTermino(), hora(ruta.getOdometroTerminoEn(), zona),
-                paradas, LinksNavegacion.tramosGoogleMaps(origen, puntos, config.getParadasPorTramoMaps()), advertencias);
+                paradas, LinksNavegacion.tramosGoogleMaps(origen, puntos, config.getParadasPorTramoMaps()), advertencias,
+                estado(ruta, paradas.size(), resueltas));
+    }
+
+    private EstadoRuta estado(Ruta ruta, int paradas, int resueltas) {
+        return EstadoRuta.de(paradas, resueltas, ruta.isVuelveABodega(), ruta.getOdometroSalida() != null,
+                ruta.getOdometroTermino() != null, ruta.getFecha().isBefore(LocalDate.now(config.zona())));
     }
 
     private static LocalTime hora(Instant instante, ZoneId zona) {
