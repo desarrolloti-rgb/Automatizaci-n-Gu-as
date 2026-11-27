@@ -122,7 +122,7 @@ Ver S-1 a S-4: si todas valen, no hay preguntas.
 ## Tareas
 
 ### Fase 0: Preparación
-- [ ] T-00 Ordenar el Frontend · S · Depende de: —
+- [x] T-00 Ordenar el Frontend · S · Depende de: —
   - Qué: decidir con el usuario qué hacer con la rama `feat/pwa-sesion-comun-samex` (3 commits
     detrás) y los dos archivos sin commitear; dejar una rama limpia desde lo último publicado.
   - Criterios: `git status` limpio en una rama nueva para este trabajo; `pnpm test` en verde.
@@ -152,12 +152,12 @@ Ver S-1 a S-4: si todas valen, no hay preguntas.
     - [ ] `ArquitecturaTest` sigue en verde.
 
 ### Fase 2: Frontend
-- [ ] T-04 KPIs de rutas en la vista Rutas · S · Depende de: T-03, T-00
+- [x] T-04 KPIs de rutas en la vista Rutas · S · Depende de: T-03, T-00
   - Qué: en `bodega.component.ts`, la tira de guías solo con `vista() === 'guias'`; en
     `rutas-bodega` una tira nueva (Planificadas, En curso, Completadas, Con pendientes y km
     recorridos del día). El formulario de asignación no se toca.
   - Criterios: test del cálculo de KPIs; el formulario y "Generar ruta" funcionan igual.
-- [ ] T-05 Historial y detalle · M · Depende de: T-04
+- [x] T-05 Historial y detalle · M · Depende de: T-04
   - Qué: tabla con filtros (desde, hasta, repartidor): fecha, repartidor, estado, paradas
     resueltas/total, km planificados, odómetro salida → término, km recorridos. Al abrir una fila
     se muestra `app-ruta-resultado` con el resultado de cada parada.
@@ -174,3 +174,8 @@ Ver S-1 a S-4: si todas valen, no hay preguntas.
 
 - 2026-11-27: borrador.
 - 2026-11-27: aprobado. T-01 sin restricción UNIQUE por ruta (no `UNIQUE (ruta_id, guia_id)` como decía D-03): rechazada, reabierta y devuelta al mismo repartidor el mismo día, la guía sale dos veces en la ruta. Se trabaja en el worktree `../backend-historial` porque `backend` tiene cambios sin commitear de otra tarea.
+- 2026-11-27: T-00 resuelto sin tocar el checkout `Frontend`: el trabajo va en el worktree
+  `../Frontend-historial`, rama `feat/historial-rutas`, que sale de `origin/feat/pwa-sesion-comun-samex`
+  (ya trae el PR #2, rutas por tramos, que rehízo la vista Rutas). La tira de rutas suma "Km
+  recorridos"; los KPIs del día salen de las rutas que la vista ya carga (traen `estado`), sin
+  llamada aparte. Probado en local (perfil `local`, base `guias_historial`, backend en 8090).
