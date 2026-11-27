@@ -1052,6 +1052,38 @@ class GuiaServiceTest {
     }
 
     @Test
+    void entregarAnotaElResultadoEnLaParadaDeSuRuta() {
+        when(guiaRepository.findById(1L)).thenReturn(Optional.of(guiaConRepartidor()));
+        devuelveLoQueGuarda();
+
+        Guia resultado = service.entregar(1L, 7, "https://fotos/guia-1.jpg", "abc123hash");
+
+        verify(rutaRepository).resolverParada(1L, EstadoGuia.ENTREGADA, resultado.getFechaEntrega());
+    }
+
+    @Test
+    void rechazarAnotaElResultadoEnLaParadaDeSuRuta() {
+        when(guiaRepository.findById(1L)).thenReturn(Optional.of(guiaConRepartidor()));
+        devuelveLoQueGuarda();
+
+        Guia resultado = service.rechazar(1L, 7, "El cliente no tenía espacio en bodega");
+
+        verify(rutaRepository).resolverParada(1L, EstadoGuia.RECHAZADA, resultado.getFechaEntrega());
+    }
+
+    @Test
+    void unaEntregaQueNoProcedeNoTocaLaParada() {
+        // Si la entrega no procede (guía ya resuelta), la parada no se marca.
+        Guia entregada = guiaConRepartidor();
+        entregada.setEstado(EstadoGuia.ENTREGADA);
+        when(guiaRepository.findById(1L)).thenReturn(Optional.of(entregada));
+
+        assertThrows(ApiException.class, () -> service.entregar(1L, 7, "https://fotos/guia-1.jpg", "abc123hash"));
+
+        verify(rutaRepository, never()).resolverParada(any(), any(), any());
+    }
+
+    @Test
     void entregarExigeUrlDeFoto() {
         ApiException sinUrl = assertThrows(ApiException.class, () -> service.entregar(1L, 7,null, "hash"));
         ApiException urlEnBlanco = assertThrows(ApiException.class, () -> service.entregar(1L, 7,"   ", "hash"));

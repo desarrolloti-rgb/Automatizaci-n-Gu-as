@@ -1,5 +1,6 @@
 package com.calimport.guias.repository;
 
+import java.time.Instant;
 import java.time.LocalDate;
 import java.util.Collection;
 import java.util.Optional;
@@ -10,6 +11,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import com.calimport.guias.model.EstadoGuia;
 import com.calimport.guias.model.Ruta;
 
 @Repository
@@ -49,6 +51,19 @@ public interface RutaRepository extends JpaRepository<Ruta, Long> {
      *
      * @param desde hoy, en la zona de las rutas
      */
+    /**
+     * Anota cómo terminó la guía en su parada más reciente sin resolver: la de la ruta en que
+     * salió esta vez. Las de rutas anteriores ya tienen su propio resultado. Es un UPDATE de dos
+     * columnas, como {@code GuiaRepository.guardarCorreo}: no reescribe la parada entera.
+     *
+     * @return cuántas paradas marcó: 0 si la guía se entregó sin estar en una ruta
+     */
+    @Modifying(flushAutomatically = true)
+    @Query("update RutaParada p set p.resultado = :resultado, p.resueltaEn = :cuando where p.id ="
+            + " (select max(p2.id) from RutaParada p2 where p2.guia.id = :guiaId and p2.resultado is null)")
+    int resolverParada(@Param("guiaId") Long guiaId, @Param("resultado") EstadoGuia resultado,
+                       @Param("cuando") Instant cuando);
+
     @Modifying(flushAutomatically = true, clearAutomatically = true)
     @Query("delete from RutaParada p where p.guia.id = :guiaId and p.resultado is null"
             + " and p.ruta.id in (select r.id from Ruta r where r.fecha >= :desde)")

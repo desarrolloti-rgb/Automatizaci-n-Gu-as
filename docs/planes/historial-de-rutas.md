@@ -137,7 +137,7 @@ Ver S-1 a S-4: si todas valen, no hay preguntas.
     - [ ] Test: guía en la ruta de ayer, se rutea hoy → está en las dos.
     - [ ] Test: reasignar una guía la saca de la ruta de hoy y no de la de ayer.
     - [ ] La app arranca con `ddl-auto=validate`.
-- [ ] T-02 Resultado en la parada · S · Depende de: T-01
+- [x] T-02 Resultado en la parada · S · Depende de: T-01
   - Qué: `GuiaService.entregar` y `rechazar` escriben `resultado` y `resuelta_en` en la parada de
     la ruta más reciente de la guía (con UPDATE parcial, como `guardarCorreo`).
   - Criterios:

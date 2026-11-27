@@ -188,6 +188,32 @@ class RutaRepositoryTest {
     }
 
     @Test
+    void resolverUnaGuiaMarcaSuParadaMasRecienteSinResolver() {
+        // Rechazada ayer, entregada hoy: cada ruta dice lo suyo.
+        Guia a = guia(2016);
+        guardarRuta(7, AYER, List.of(a));
+        Instant ayer = Instant.parse("2026-09-14T15:00:00Z");
+        rutaRepository.resolverParada(a.getId(), EstadoGuia.RECHAZADA, ayer);
+        guardarRuta(7, FECHA, List.of(guiaRepository.findById(a.getId()).orElseThrow()));
+        Instant hoy = Instant.parse("2026-09-15T15:00:00Z");
+
+        int marcadas = rutaRepository.resolverParada(a.getId(), EstadoGuia.ENTREGADA, hoy);
+
+        assertEquals(1, marcadas);
+        RutaParada deAyer = rutaRepository.findByRepartidorIdAndFecha(7, AYER).orElseThrow().getParadas().get(0);
+        RutaParada deHoy = rutaRepository.findByRepartidorIdAndFecha(7, FECHA).orElseThrow().getParadas().get(0);
+        assertEquals(EstadoGuia.RECHAZADA, deAyer.getResultado());
+        assertEquals(ayer, deAyer.getResueltaEn());
+        assertEquals(EstadoGuia.ENTREGADA, deHoy.getResultado());
+        assertEquals(hoy, deHoy.getResueltaEn());
+    }
+
+    @Test
+    void resolverUnaGuiaSinRutaNoMarcaNada() {
+        assertEquals(0, rutaRepository.resolverParada(guia(2017).getId(), EstadoGuia.ENTREGADA, Instant.now()));
+    }
+
+    @Test
     void laMismaGuiaPuedeSalirDosVecesElMismoDia() {
         // Rechazada, reabierta y devuelta al mismo repartidor: la ruta muestra los dos intentos.
         Guia a = guia(2015);

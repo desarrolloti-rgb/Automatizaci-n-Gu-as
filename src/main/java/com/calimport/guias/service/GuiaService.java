@@ -521,6 +521,7 @@ public class GuiaService {
         guia.setUrlFoto(urlFoto);
         guia.setHashFoto(hashFoto);
         correoDespacho.programar(guia);
+        rutaRepository.resolverParada(id, EstadoGuia.ENTREGADA, guia.getFechaEntrega());
         return guardarYReflejar(guia);
     }
 
@@ -567,6 +568,7 @@ public class GuiaService {
         guia.setEstado(EstadoGuia.RECHAZADA);
         guia.setFechaEntrega(Instant.now());
         guia.setMotivoRechazo(motivoLimpio);
+        rutaRepository.resolverParada(id, EstadoGuia.RECHAZADA, guia.getFechaEntrega());
         return guardarYReflejar(guia);
     }
 
