@@ -170,6 +170,17 @@ class RutaControllerTest {
     }
 
     @Test
+    void miaSinFechaPideAlServicioLaRutaDeHoy() throws Exception {
+        when(rutaService.obtenerDeHoy(7)).thenReturn(ruta());
+
+        mockMvc.perform(get("/api/rutas/mia").header("Authorization", repartidor))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.repartidorId").value(7));
+
+        verify(rutaService).obtenerDeHoy(7);
+    }
+
+    @Test
     void elRepartidorAnotaElOdometroEnSuPropiaRuta() throws Exception {
         when(rutaService.anotarOdometro(eq(7), any(OdometroRequest.class))).thenReturn(ruta());
 

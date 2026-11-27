@@ -186,6 +186,15 @@ public class RutaService {
     }
 
     /**
+     * La ruta de <b>hoy</b> en la zona de las rutas, no en la del servidor: la VM corre en
+     * UTC y, entre las 21:00 y las 24:00 de Chile, su "hoy" ya es mañana.
+     */
+    @Transactional(readOnly = true)
+    public RutaResponse obtenerDeHoy(Integer repartidorId) {
+        return obtener(repartidorId, LocalDate.now(config.zona()));
+    }
+
+    /**
      * El repartidor anota lo que marca el odómetro al salir o al terminar, en su ruta de
      * <b>hoy</b>: la lectura vale como respaldo porque se anota en el momento, y cada una
      * guarda cuándo. Es el kilometraje real contra el que se compara el plan.

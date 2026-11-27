@@ -3,6 +3,7 @@ package com.calimport.guias.service;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalTime;
+import java.time.ZoneId;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -502,6 +503,24 @@ class RutaServiceTest {
         assertEquals(2, ruta.tramosGoogleMaps().size());
         assertEquals("https://www.google.com/maps/dir/?api=1&origin=-33.100000,-70.000000"
                 + "&destination=-33.400000,-70.600000&travelmode=driving", ruta.tramosGoogleMaps().get(1));
+    }
+
+    // --- La ruta de hoy del repartidor ----------------------------------------------
+
+    @Test
+    void sinFechaElRepartidorVeLaRutaDeHoyEnLaZonaDeLasRutasNoEnLaDelServidor() {
+        // La VM corre en UTC: entre las 21:00 y las 24:00 de Chile, "hoy" en el servidor ya
+        // es mañana. Se elige una zona cuyo día no coincide con el de la JVM (UTC+14 y UTC-12
+        // nunca caen los dos en el mismo día), así el test falla si se vuelve a LocalDate.now().
+        LocalDate diaDelServidor = LocalDate.now();
+        config.setZonaHoraria(LocalDate.now(ZoneId.of("Pacific/Kiritimati")).equals(diaDelServidor)
+                ? "Etc/GMT+12" : "Pacific/Kiritimati");
+        Ruta ruta = rutaDeHoy();
+
+        RutaResponse respuesta = service.obtenerDeHoy(REPARTIDOR);
+
+        assertEquals(ruta.getFecha(), respuesta.fecha());
+        verify(rutaRepository).findByRepartidorIdAndFecha(REPARTIDOR, LocalDate.now(config.zona()));
     }
 
     // --- Kilometraje real: el odómetro que anota el repartidor ------------------------

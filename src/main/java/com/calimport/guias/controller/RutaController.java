@@ -75,7 +75,7 @@ public class RutaController {
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate fecha,
             Authentication authentication) {
         int employeeId = UsuarioActual.de(authentication).employeeId();
-        return rutaService.obtener(employeeId, fecha != null ? fecha : LocalDate.now());
+        return fecha != null ? rutaService.obtener(employeeId, fecha) : rutaService.obtenerDeHoy(employeeId);
     }
 
     /**
