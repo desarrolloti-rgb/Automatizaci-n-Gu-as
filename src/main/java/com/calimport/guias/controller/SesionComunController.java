@@ -14,6 +14,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.calimport.guias.controller.dto.LoginResponse;
 import com.calimport.guias.model.Rol;
+import com.calimport.guias.sap.EmpleadoSap;
 import com.calimport.guias.sap.SapClient;
 import com.calimport.guias.security.JwtTokenProvider;
 import com.calimport.guias.security.SesionComun;
@@ -95,13 +96,13 @@ public class SesionComunController {
             return sinSesion(true);
         }
         String cargo = empleado.path("JobTitle").asText("").trim();
-        if (AuthController.rolDeCargo(cargo).orElse(null) != Rol.JEFE_BODEGA) {
+        if (EmpleadoSap.rolDeCargo(cargo).orElse(null) != Rol.JEFE_BODEGA) {
             log.info("Sesión común de {} cerrada: su cargo (\"{}\") ya no es jefe de bodega.", datos.email(), cargo);
             return sinSesion(true);
         }
 
         String email = empleado.path("eMail").asText(datos.email());
-        String nombre = AuthController.nombreCompleto(empleado);
+        String nombre = EmpleadoSap.nombreCompleto(empleado);
         repartidorService.upsertDesdeSap(datos.employeeId(), nombre, email, true, Rol.JEFE_BODEGA);
         String token = jwtTokenProvider.generateToken(email, datos.employeeId(), nombre, Rol.JEFE_BODEGA);
 

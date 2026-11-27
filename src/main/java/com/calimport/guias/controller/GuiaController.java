@@ -26,12 +26,14 @@ import com.calimport.guias.controller.dto.DefinirHorarioRequest;
 import com.calimport.guias.controller.dto.DefinirTransportistaRequest;
 import com.calimport.guias.controller.dto.EntregaRequest;
 import com.calimport.guias.controller.dto.RechazoRequest;
+import com.calimport.guias.controller.dto.ResultadoSincronizacion;
 import com.calimport.guias.model.EstadoGuia;
 import com.calimport.guias.model.Guia;
 import com.calimport.guias.sap.SapSessionManager.SapUnauthorizedException;
 import com.calimport.guias.security.UsuarioActual;
 import com.calimport.guias.service.GuiaService;
 import com.calimport.guias.service.GuiaSyncService;
+import com.calimport.guias.service.SincronizacionRepartidoresService;
 import com.calimport.guias.utils.ApiException;
 
 import jakarta.validation.Valid;
@@ -49,10 +51,13 @@ public class GuiaController {
 
     private final GuiaService guiaService;
     private final GuiaSyncService guiaSyncService;
+    private final SincronizacionRepartidoresService sincronizacionRepartidores;
 
-    public GuiaController(GuiaService guiaService, GuiaSyncService guiaSyncService) {
+    public GuiaController(GuiaService guiaService, GuiaSyncService guiaSyncService,
+                          SincronizacionRepartidoresService sincronizacionRepartidores) {
         this.guiaService = guiaService;
         this.guiaSyncService = guiaSyncService;
+        this.sincronizacionRepartidores = sincronizacionRepartidores;
     }
 
     /**
@@ -61,10 +66,14 @@ public class GuiaController {
      * <p>Es idempotente: repetirla no duplica nada y solo refresca las que sigan
      * PENDIENTE. Por ahora se dispara a mano; cuando el criterio de filtrado esté
      * confirmado, se le puede colgar un {@code @Scheduled}.
+     *
+     * <p>Después pone al día la lista de repartidores con los empleados de SAP, que es lo que
+     * bodega va a necesitar para asignar lo que acaba de traer. Si eso falla, las guías igual
+     * quedan importadas y la respuesta lo dice en {@code errorRepartidores}.
      */
     @PostMapping("/sincronizar")
     @PreAuthorize("hasRole('JEFE_BODEGA')")
-    public GuiaSyncService.Resultado sincronizar(
+    public ResultadoSincronizacion sincronizar(
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate desde,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate hasta) {
         LocalDate fecha = desde != null ? desde : LocalDate.now();
@@ -73,14 +82,21 @@ public class GuiaController {
         if (hasta != null && hasta.isBefore(fecha)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "La fecha 'hasta' no puede ser anterior a 'desde'");
         }
+        GuiaSyncService.Resultado guias;
         try {
-            return guiaSyncService.sincronizar(fecha, hasta);
+            guias = guiaSyncService.sincronizar(fecha, hasta);
         } catch (SapUnauthorizedException e) {
             log.error("Sesion SAP invalida sincronizando guias: {}", e.getMessage());
             throw new ApiException(HttpStatus.BAD_GATEWAY, "Error de sesión con SAP");
         } catch (Exception e) {
             log.error("Error sincronizando guias desde SAP: {}", e.getMessage(), e);
             throw new ApiException(HttpStatus.BAD_GATEWAY, "Error de conexión con SAP");
+        }
+        try {
+            return ResultadoSincronizacion.de(guias, sincronizacionRepartidores.sincronizar().orElse(null), null);
+        } catch (Exception e) {
+            log.error("Error poniendo al dia los repartidores desde SAP: {}", e.getMessage(), e);
+            return ResultadoSincronizacion.de(guias, null, "No se pudo actualizar la lista de repartidores desde SAP.");
         }
     }
 

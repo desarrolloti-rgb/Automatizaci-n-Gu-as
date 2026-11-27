@@ -3,6 +3,7 @@ package com.calimport.guias.controller;
 import com.calimport.guias.controller.dto.LoginRequest;
 import com.calimport.guias.controller.dto.LoginResponse;
 import com.calimport.guias.model.Rol;
+import com.calimport.guias.sap.EmpleadoSap;
 import com.calimport.guias.sap.SapClient;
 import com.calimport.guias.sap.SapSessionManager.SapUnauthorizedException;
 import com.calimport.guias.security.JwtTokenProvider;
@@ -17,9 +18,6 @@ import tools.jackson.databind.JsonNode;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
-import java.text.Normalizer;
-import java.util.Locale;
-import java.util.Optional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -106,12 +104,12 @@ public class AuthController {
         }
         int employeeId = employee.get("EmployeeID").asInt();
         String email = employee.get("eMail").asText();
-        String nombre = nombreCompleto(employee);
+        String nombre = EmpleadoSap.nombreCompleto(employee);
 
         // Después de validar la clave: este mensaje solo lo ve quien tiene credenciales
         // correctas, así el login no revela qué correos existen.
         String cargo = employee.has("JobTitle") ? employee.get("JobTitle").asText("").trim() : "";
-        Rol rol = rolDeCargo(cargo).orElseThrow(() -> {
+        Rol rol = EmpleadoSap.rolDeCargo(cargo).orElseThrow(() -> {
             log.info("Ingreso a Guías rechazado para {}: el cargo \"{}\" no tiene acceso.", email,
                     cargo.isEmpty() ? "sin cargo" : cargo);
             return new ApiException(HttpStatus.FORBIDDEN, "Su cargo" + (cargo.isEmpty() ? "" : " (" + cargo + ")")
@@ -134,52 +132,6 @@ public class AuthController {
                     : sesionComun.borrar().toString());
         }
         return new LoginResponse(token);
-    }
-
-    /**
-     * Solo los cargos de bodega entran a Guías. Desde el 2026-11-09 el jefe de bodega entra
-     * además al Panel de Facturadores, con una sesión común a las dos ({@link SesionComun});
-     * el resto de los cargos sigue entrando a una sola app desde el ingreso común
-     * (https://apps.calimport.cl/login, decisión del 2026-10-06). El panel reconoce al jefe
-     * con esta misma regla (Panel-Facturadores/backend/src/auth.js): si cambia acá, cambia
-     * allá. La comparación ignora mayúsculas, tildes y espacios de más.
-     * <ul>
-     *   <li>JEFE_BODEGA: "Jefe Bodega" y sus variantes, incluido el typo real "Jefe bogeda".
-     *       Desde el 2026-11-25 también "Gerencia Operaciones", que ve todas las pestañas del
-     *       portal (panel y Guías) con la misma sesión común.</li>
-     *   <li>Despachador: "Bodeguero"/"Bodeguera" con o sin sucursal ("Bodeguero CCP",
-     *       "Bodeguera ANT"), "Despachador"/"Despachadora", "Bodega" y "Personal bodega".</li>
-     * </ul>
-     * Cualquier otro cargo, vacío o ausente no entra: un cargo inesperado no gana acceso
-     * por accidente.
-     */
-    static Optional<Rol> rolDeCargo(String jobTitle) {
-        String cargo = Normalizer.normalize(jobTitle == null ? "" : jobTitle, Normalizer.Form.NFD)
-                .replaceAll("\\p{M}", "")
-                .toLowerCase(Locale.ROOT)
-                .trim()
-                .replaceAll("\\s+", " ");
-
-        if ((cargo.startsWith("jefe") && (cargo.contains("bodega") || cargo.contains("bogeda")))
-                || cargo.equals("gerencia operaciones")) {
-            return Optional.of(Rol.JEFE_BODEGA);
-        }
-        if (cargo.startsWith("bodeguer") || cargo.startsWith("despachador") || cargo.equals("bodega")
-                || cargo.equals("personal bodega")) {
-            return Optional.of(Rol.Despachador);
-        }
-        return Optional.empty();
-    }
-
-    /**
-     * OJO: nombres de campo asumidos ("FirstName"/"LastName") por analogía con el resto
-     * de EmployeesInfo en Dashboard (JobTitle, WorkBlock, Active). No están confirmados
-     * contra el metadata real del Service Layer — verificar antes de confiar en el dato.
-     */
-    static String nombreCompleto(JsonNode employee) {
-        String nombres = employee.has("FirstName") ? employee.get("FirstName").asText("") : "";
-        String apellidos = employee.has("LastName") ? employee.get("LastName").asText("") : "";
-        return (nombres + " " + apellidos).trim();
     }
 
     /**
