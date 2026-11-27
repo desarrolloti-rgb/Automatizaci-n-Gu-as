@@ -10,8 +10,10 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.calimport.guias.model.EstadoGuia;
 import com.calimport.guias.model.Guia;
 import com.calimport.guias.model.Ruta;
+import com.calimport.guias.model.RutaParada;
 
 import jakarta.persistence.EntityManager;
 
@@ -41,7 +43,11 @@ class RutaRepositoryTest {
     }
 
     private void guardarRuta(int repartidorId, List<Guia> guias) {
-        Ruta ruta = new Ruta(repartidorId, FECHA, LocalTime.of(9, 0));
+        guardarRuta(repartidorId, FECHA, guias);
+    }
+
+    private void guardarRuta(int repartidorId, LocalDate fecha, List<Guia> guias) {
+        Ruta ruta = new Ruta(repartidorId, fecha, LocalTime.of(9, 0));
         int orden = 1;
         for (Guia g : guias) {
             ruta.agregarParada(g, orden++, Instant.now());
@@ -121,5 +127,78 @@ class RutaRepositoryTest {
         Ruta deJuan = rutaRepository.findByRepartidorIdAndFecha(7, FECHA).orElseThrow();
         assertEquals(List.of(a.getId()), deJuan.getParadas().stream().map(p -> p.getGuia().getId()).toList());
         assertTrue(rutaRepository.findByRepartidorIdAndFecha(8, FECHA).isPresent());
+    }
+
+    // --- Historial: el recorrido de un día pasado no se reescribe -----------------------------
+
+    private static final LocalDate AYER = FECHA.minusDays(1);
+
+    private List<Long> guiasDe(int repartidorId, LocalDate fecha) {
+        return rutaRepository.findByRepartidorIdAndFecha(repartidorId, fecha).orElseThrow()
+                .getParadas().stream().map(p -> p.getGuia().getId()).toList();
+    }
+
+    @Test
+    void unaGuiaQueVuelveASalirQuedaEnLaRutaDeAyerYEnLaDeHoy() {
+        // Ayer no se pudo entregar; hoy sale de nuevo. El recorrido de ayer es historia.
+        Guia a = guia(2010);
+        guardarRuta(7, AYER, List.of(a));
+
+        rutaRepository.borrarParadasPrevias(List.of(a.getId()), 7, FECHA);
+        guardarRuta(7, FECHA, List.of(guiaRepository.findById(a.getId()).orElseThrow()));
+
+        assertEquals(List.of(a.getId()), guiasDe(7, AYER));
+        assertEquals(List.of(a.getId()), guiasDe(7, FECHA));
+    }
+
+    @Test
+    void sacarUnaGuiaDeLasRutasNoTocaLasDeDiasAnteriores() {
+        Guia a = guia(2011);
+        Guia b = guia(2012);
+        guardarRuta(7, AYER, List.of(a));
+        guardarRuta(7, FECHA, List.of(a, b));
+
+        rutaRepository.quitarGuiaDeRutas(a.getId(), FECHA);
+
+        assertEquals(List.of(a.getId()), guiasDe(7, AYER));
+        assertEquals(List.of(b.getId()), guiasDe(7, FECHA));
+    }
+
+    @Test
+    void unaParadaYaResueltaNoSeBorraNiAlReasignarNiAlRegenerar() {
+        // Rechazada esta mañana y reabierta: lo que pasó en esa parada queda en la ruta de hoy.
+        Guia a = guia(2013);
+        Guia b = guia(2014);
+        guardarRuta(7, FECHA, List.of(a, b));
+        Ruta ruta = rutaRepository.findByRepartidorIdAndFecha(7, FECHA).orElseThrow();
+        Instant cuando = Instant.parse("2026-09-15T14:00:00Z");
+        ruta.getParadas().get(0).resolver(EstadoGuia.RECHAZADA, cuando);
+        rutaRepository.save(ruta);
+        entityManager.flush();
+        entityManager.clear();
+
+        rutaRepository.quitarGuiaDeRutas(a.getId(), FECHA);
+        rutaRepository.borrarParadasPrevias(List.of(b.getId()), 7, FECHA);
+
+        RutaParada queda = rutaRepository.findByRepartidorIdAndFecha(7, FECHA).orElseThrow().getParadas().get(0);
+        assertEquals(1, rutaRepository.findByRepartidorIdAndFecha(7, FECHA).orElseThrow().getParadas().size());
+        assertEquals(a.getId(), queda.getGuia().getId());
+        assertEquals(EstadoGuia.RECHAZADA, queda.getResultado());
+        assertEquals(cuando, queda.getResueltaEn());
+    }
+
+    @Test
+    void laMismaGuiaPuedeSalirDosVecesElMismoDia() {
+        // Rechazada, reabierta y devuelta al mismo repartidor: la ruta muestra los dos intentos.
+        Guia a = guia(2015);
+        guardarRuta(7, FECHA, List.of(a));
+        Ruta ruta = rutaRepository.findByRepartidorIdAndFecha(7, FECHA).orElseThrow();
+        ruta.getParadas().get(0).resolver(EstadoGuia.RECHAZADA, Instant.parse("2026-09-15T14:00:00Z"));
+        ruta.agregarParada(guiaRepository.findById(a.getId()).orElseThrow(), 2, Instant.now());
+        rutaRepository.save(ruta);
+        entityManager.flush();
+        entityManager.clear();
+
+        assertEquals(List.of(a.getId(), a.getId()), guiasDe(7, FECHA));
     }
 }

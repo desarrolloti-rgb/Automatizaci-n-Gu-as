@@ -4,6 +4,8 @@ import java.time.Instant;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.FetchType;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
@@ -34,6 +36,16 @@ public class RutaParada {
     @Column(nullable = false)
     private Instant llegadaEstimada;
 
+    /**
+     * Lo que pasó en esta parada: ENTREGADA o RECHAZADA. Es de la parada y no de la guía: una
+     * guía rechazada ayer y entregada hoy está en dos rutas, y cada una dice lo suyo. Null mientras
+     * no se resuelva. Una parada resuelta ya no la borra ni regenerar ni reasignar.
+     */
+    @Enumerated(EnumType.STRING)
+    private EstadoGuia resultado;
+
+    private Instant resueltaEn;
+
     protected RutaParada() {
     }
 
@@ -62,5 +74,22 @@ public class RutaParada {
 
     public Instant getLlegadaEstimada() {
         return llegadaEstimada;
+    }
+
+    public EstadoGuia getResultado() {
+        return resultado;
+    }
+
+    public Instant getResueltaEn() {
+        return resueltaEn;
+    }
+
+    /** Anota cómo terminó la parada. Solo ENTREGADA o RECHAZADA: PENDIENTE no es un resultado. */
+    public void resolver(EstadoGuia resultado, Instant cuando) {
+        if (resultado == null || resultado == EstadoGuia.PENDIENTE) {
+            throw new IllegalArgumentException("Una parada se resuelve como ENTREGADA o RECHAZADA, no " + resultado);
+        }
+        this.resultado = resultado;
+        this.resueltaEn = cuando;
     }
 }
