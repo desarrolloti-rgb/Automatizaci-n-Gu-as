@@ -1,6 +1,6 @@
 # Plan: Historial de rutas y KPIs de rutas
 
-Estado: en curso
+Estado: terminado
 Fecha: 2026-11-27 · Responsable: Max (desarrollo TI)
 
 ## Objetivo y criterio de éxito
@@ -164,10 +164,10 @@ Ver S-1 a S-4: si todas valen, no hay preguntas.
   - Criterios: tests del servicio y del armado de filas; se ve bien en celular.
 
 ### Fase 3: Salida
-- [ ] T-06 Prueba · S · Depende de: T-05
+- [x] T-06 Prueba · S · Depende de: T-05
   - Qué: respaldo de `guias_prueba`, `desplegar.ps1 -Prueba`, recorrer: generar ruta, anotar
     odómetro, entregar y rechazar, ver KPIs e historial.
-- [ ] T-07 Producción · S · Depende de: T-06 y visto bueno
+- [x] T-07 Producción · S · Depende de: T-06 y visto bueno
   - Qué: respaldo de `guias`, `desplegar.ps1`, verificar que V15 corrió y que la pestaña carga.
 
 ## Registro de cambios del plan
@@ -179,3 +179,7 @@ Ver S-1 a S-4: si todas valen, no hay preguntas.
   (ya trae el PR #2, rutas por tramos, que rehízo la vista Rutas). La tira de rutas suma "Km
   recorridos"; los KPIs del día salen de las rutas que la vista ya carga (traen `estado`), sin
   llamada aparte. Probado en local (perfil `local`, base `guias_historial`, backend en 8090).
+- 2026-11-27: desplegado en prueba (14:01) y producción (14:11) desde `integracion/historial-y-sync`,
+  que junta esta rama con `feat/sync-repartidores` (prueba ya corría esa sincronización sin
+  commitear). Respaldos previos: `guias_prueba-antes-de-historial-2026-11-27-1358.sql.gz` y
+  `guias-antes-de-historial-2026-11-27-1408.sql.gz`, en el bucket de respaldos.
