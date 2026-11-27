@@ -2,6 +2,7 @@ package com.calimport.guias.controller;
 
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Optional;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -21,6 +22,8 @@ import com.calimport.guias.security.JwtTokenProvider;
 import com.calimport.guias.security.UsuarioActual;
 import com.calimport.guias.service.GuiaService;
 import com.calimport.guias.service.GuiaSyncService;
+import com.calimport.guias.service.RepartidorService.CambiosRepartidores;
+import com.calimport.guias.service.SincronizacionRepartidoresService;
 import com.calimport.guias.utils.ApiException;
 
 import io.jsonwebtoken.Jwts;
@@ -65,6 +68,9 @@ class GuiaControllerTest {
 
     @MockitoBean
     private GuiaSyncService guiaSyncService;
+
+    @MockitoBean
+    private SincronizacionRepartidoresService sincronizacionRepartidores;
 
     private String repartidor;
     private String jefe;
@@ -508,6 +514,43 @@ class GuiaControllerTest {
                 .andExpect(status().isBadRequest());
 
         verify(guiaSyncService, never()).sincronizar(any(), any());
+    }
+
+    @Test
+    void sincronizarTambienPoneAlDiaALosRepartidores() throws Exception {
+        when(guiaSyncService.sincronizar(any(), any())).thenReturn(new GuiaSyncService.Resultado(3, 0, 0, 0));
+        when(sincronizacionRepartidores.sincronizar()).thenReturn(Optional.of(
+                new CambiosRepartidores(List.of("Ana Soto"), List.of("Juan Perez"), List.of())));
+
+        mockMvc.perform(post("/api/guias/sincronizar").header("Authorization", jefe))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.sincronizadas").value(3))
+                .andExpect(jsonPath("$.repartidores.altas[0]").value("Ana Soto"))
+                .andExpect(jsonPath("$.repartidores.bajas[0]").value("Juan Perez"))
+                .andExpect(jsonPath("$.errorRepartidores").doesNotExist());
+    }
+
+    @Test
+    void siFallaLaListaDeRepartidoresLasGuiasIgualSeSincronizan() throws Exception {
+        // Las guías son lo que bodega vino a buscar: la lista de repartidores es secundaria.
+        when(guiaSyncService.sincronizar(any(), any())).thenReturn(new GuiaSyncService.Resultado(3, 0, 0, 0));
+        when(sincronizacionRepartidores.sincronizar()).thenThrow(new RuntimeException("timeout"));
+
+        mockMvc.perform(post("/api/guias/sincronizar").header("Authorization", jefe))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.sincronizadas").value(3))
+                .andExpect(jsonPath("$.repartidores").doesNotExist())
+                .andExpect(jsonPath("$.errorRepartidores").value("No se pudo actualizar la lista de repartidores desde SAP."));
+    }
+
+    @Test
+    void siLasGuiasFallanNoSeTocanLosRepartidores() throws Exception {
+        when(guiaSyncService.sincronizar(any(), any())).thenThrow(new RuntimeException("connection timeout"));
+
+        mockMvc.perform(post("/api/guias/sincronizar").header("Authorization", jefe))
+                .andExpect(status().isBadGateway());
+
+        verify(sincronizacionRepartidores, never()).sincronizar();
     }
 
     @Test

@@ -1,6 +1,8 @@
 package com.calimport.guias.sap;
 
 import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 
 import org.slf4j.Logger;
@@ -183,6 +185,53 @@ public class SapClient {
                         .header("Cookie", cookie)
                         .retrieve()
                         .body(JsonNode.class));
+    }
+
+    /** Tope de páginas al leer los empleados: si SAP repitiera el nextLink, el ciclo no termina nunca. */
+    private static final int MAX_PAGINAS_EMPLEADOS = 50;
+    private static final int EMPLEADOS_POR_PAGINA = 200;
+
+    /**
+     * Todos los empleados de SAP, activos e inactivos, para poner al día la lista de
+     * repartidores: los inactivos hacen falta para dar de baja a quien dejó la empresa.
+     *
+     * <p>Service Layer pagina (20 por página si no se pide otra cosa) y avisa que hay más con
+     * {@code odata.nextLink} ({@code @odata.nextLink} en v2). Se sigue con {@code $skip} propio en
+     * vez de usar la URL del nextLink, que viene ya codificada y se volvería a codificar.
+     *
+     * @throws IllegalStateException si una página no trae {@code value}: tomarla como "sin
+     *     empleados" terminaría dando de baja a todos los repartidores.
+     */
+    public List<EmpleadoSap> fetchEmpleados() {
+        List<EmpleadoSap> empleados = new ArrayList<>();
+        int saltar = 0;
+        for (int pagina = 0; pagina < MAX_PAGINAS_EMPLEADOS; pagina++) {
+            String uri = "/EmployeesInfo?$select=" + EmpleadoSap.CAMPOS + "&$orderby=EmployeeID&$skip=" + saltar;
+            JsonNode respuesta = sessionManager.executeWithSession(cookie ->
+                    sessionManager.getRestClient().get()
+                            .uri(uri)
+                            .header("Cookie", cookie)
+                            .header("Prefer", "odata.maxpagesize=" + EMPLEADOS_POR_PAGINA)
+                            .retrieve()
+                            .body(JsonNode.class));
+            JsonNode value = respuesta == null ? null : respuesta.get("value");
+            if (value == null || !value.isArray()) {
+                throw new IllegalStateException("SAP no devolvio un arreglo 'value' al pedir los empleados");
+            }
+            for (JsonNode fila : value) {
+                EmpleadoSap empleado = EmpleadoSap.de(fila);
+                if (empleado != null) {
+                    empleados.add(empleado);
+                }
+            }
+            boolean hayMas = respuesta.hasNonNull("odata.nextLink") || respuesta.hasNonNull("@odata.nextLink");
+            if (!hayMas || value.isEmpty()) {
+                return empleados;
+            }
+            saltar += value.size();
+        }
+        throw new IllegalStateException("SAP siguio paginando los empleados despues de "
+                + MAX_PAGINAS_EMPLEADOS + " paginas");
     }
 
     /** Igual que en Dashboard: busca en EmployeesInfo por eMail, solo activos. */

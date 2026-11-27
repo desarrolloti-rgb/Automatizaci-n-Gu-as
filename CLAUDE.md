@@ -479,7 +479,7 @@ todas.
 
 ## Endpoints principales
 
-`POST /api/guias/sincronizar` (importa desde SAP) · `GET /api/guias` (filtrable por estado
+`POST /api/guias/sincronizar` (importa desde SAP y pone al día los repartidores) · `GET /api/guias` (filtrable por estado
 y repartidor) · `POST /api/guias` · `PATCH /api/guias/{id}/repartidor` ·
 `PATCH /api/guias/{id}/recepcion` · `POST /api/guias/{id}/entrega` ·
 `POST /api/guias/{id}/rechazo` · `PATCH /api/guias/{id}/sincronizada` ·
@@ -512,8 +512,25 @@ nunca gana permisos. `JwtAuthenticationFilter` arma la authority `ROLE_<rol>`.
 `listarActivos()` y `RutaService` sólo aceptan `Despachador`, porque el jefe está en la
 misma tabla pero no reparte.
 
+**La lista de repartidores se pone al día al sincronizar** (desde el 2026-11-26): después de
+importar las guías, `POST /api/guias/sincronizar` lee **todos** los empleados de
+`EmployeesInfo` (`SapClient.fetchEmpleados`, paginando con `$skip`) y
+`RepartidorService.sincronizarConSap` deja la tabla igual a SAP: activo con cargo de bodega
+→ activo con su nombre, correo y rol (alta si es nuevo); inactivo en SAP, con otro cargo o
+que ya no está → `activo = false` (no se borra: sus guías lo siguen nombrando).
+`vuelveABodega` no se toca. Así un despachador nuevo se puede asignar sin haber iniciado
+sesión y el que se va deja de aparecer en el selector. Reglas de cuidado:
+- Una lista vacía no da de baja a nadie, y una respuesta sin `value` es un error: tomarla
+  como "sin empleados" vaciaría el selector.
+- Sin correo, o con el correo de otro empleado (es `unique`), no se carga: va en `omitidos`
+  y bodega lo ve.
+- Si falla, las guías igual quedan importadas: la respuesta trae `errorRepartidores` en vez
+  de `repartidores` (`ResultadoSincronizacion`).
+- Con `auth.modo=local` no corre (`SincronizacionRepartidoresService`): los usuarios de
+  prueba no están en SAP y quedarían de baja.
+
 - `auth.modo=local`: campo `rol` de `auth.local.usuarios[n]`, `Despachador` si no se declara.
-- `auth.modo=sap`: sale del campo `JobTitle` de `EmployeesInfo` (`AuthController.rolDeCargo`).
+- `auth.modo=sap`: sale del campo `JobTitle` de `EmployeesInfo` (`EmpleadoSap.rolDeCargo`).
   Normalizado (minúsculas, sin tildes), si **empieza con "jefe" y contiene "bodega" o
   "bogeda"** → `JEFE_BODEGA`: tolera el typo real de esta instalación ("Jefe bogeda") y
   variantes como "Jefe de bodega", pero no "Jefe de Ventas". Los cargos de bodega

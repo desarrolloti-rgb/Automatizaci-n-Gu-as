@@ -1,5 +1,6 @@
 package com.calimport.guias.sap;
 
+import java.util.List;
 import java.util.Map;
 
 import org.junit.jupiter.api.Test;
@@ -10,6 +11,12 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.client.HttpClientErrorException;
 
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ArrayNode;
+import tools.jackson.databind.node.ObjectNode;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.inOrder;
@@ -56,6 +63,38 @@ class SapClientTest {
                 () -> new SapClient(sessionManager).actualizarEstadoLogistico(46263, Map.of("U_EstadoLog", "E")));
 
         verify(sessionManager, times(2)).executeWithSession(any());
+    }
+
+    private static JsonNode pagina(boolean conSiguiente, int... ids) {
+        ObjectMapper json = new ObjectMapper();
+        ObjectNode pagina = json.createObjectNode();
+        ArrayNode value = pagina.putArray("value");
+        for (int id : ids) {
+            value.addObject().put("EmployeeID", id).put("eMail", "e" + id + "@calimport.cl").put("Active", "tYES");
+        }
+        if (conSiguiente) {
+            pagina.put("odata.nextLink", "EmployeesInfo?$skip=" + ids.length);
+        }
+        return pagina;
+    }
+
+    @Test
+    void losEmpleadosSeLeenPaginaPorPagina() {
+        // Service Layer entrega 20 por página por defecto: sin seguir el nextLink se perderían.
+        when(sessionManager.executeWithSession(any())).thenReturn(pagina(true, 1, 2), pagina(false, 3));
+
+        List<EmpleadoSap> empleados = new SapClient(sessionManager).fetchEmpleados();
+
+        assertEquals(List.of(1, 2, 3), empleados.stream().map(EmpleadoSap::employeeId).toList());
+        verify(sessionManager, times(2)).executeWithSession(any());
+    }
+
+    @Test
+    void unaRespuestaSinValueEsUnError() {
+        // Tomarla como "cero empleados" daría de baja a todos los repartidores.
+        when(sessionManager.executeWithSession(any())).thenReturn(new ObjectMapper().createObjectNode());
+
+        assertThrows(IllegalStateException.class, () -> new SapClient(sessionManager).fetchEmpleados());
     }
 
     @Test
